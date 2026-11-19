@@ -112,6 +112,14 @@ function walk(
 }
 
 /**
+ * Any value as JSON (`undefined` becomes `null`), normalised the same way as `toJsonObject` but
+ * without redaction. Used for job payloads and results.
+ */
+export function toJsonValue(value: unknown): unknown {
+  return walk(value, () => false, new Set(), 0) ?? null;
+}
+
+/**
  * Turns `changes` or `metadata` into a JSON object for a `jsonb` column, redacting matching keys
  * at any depth. Dates become ISO strings, bigints become strings, `undefined` is dropped, and
  * cycles are cut. The input is never modified.

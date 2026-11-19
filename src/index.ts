@@ -36,10 +36,13 @@ import type { GroundworkDatabase } from "./internal/db.ts";
 import type { Duration } from "./internal/duration.ts";
 import { GroundworkError } from "./internal/errors.ts";
 import type { Logger } from "./internal/logger.ts";
+import { createJobs } from "./jobs/jobs.ts";
+import type { Jobs } from "./jobs/types.ts";
 import { createRateLimiter } from "./rate-limit/limiter.ts";
 import type { OnError, RateLimiter, RateLimitStore } from "./rate-limit/types.ts";
 import type { ApiKeysTable } from "./schema/api-keys.ts";
 import type { AuditLogTable } from "./schema/audit-log.ts";
+import type { JobSchedulesTable, JobsTable } from "./schema/jobs.ts";
 import type { RateLimitsTable } from "./schema/rate-limits.ts";
 
 export type { Clock } from "./internal/clock.ts";
@@ -64,6 +67,8 @@ export interface GroundworkOptions<
     readonly rateLimits?: RateLimitsTable | undefined;
     readonly auditLog?: AuditLogTable | undefined;
     readonly apiKeys?: ApiKeysTable | undefined;
+    readonly jobs?: JobsTable | undefined;
+    readonly jobSchedules?: JobSchedulesTable | undefined;
   };
   /** At least 32 bytes. Changing it invalidates every API key and resets every rate limit. */
   readonly secret: Secret;
@@ -114,6 +119,19 @@ export interface GroundworkOptions<
         readonly waitUntil?: ((promise: Promise<unknown>) => void) | undefined;
       }
     | undefined;
+  readonly jobs?:
+    | {
+        /** How long a claimed job is reserved; workers renew it while the job runs. Defaults to `"1m"`. */
+        readonly lease?: Duration | undefined;
+        /** Identifies this worker in `locked_by`. */
+        readonly workerId?: string | undefined;
+        /**
+         * Schedules `gw.rateLimit.cleanup()` every hour when rate limiting is set up. Defaults to
+         * `true`.
+         */
+        readonly rateLimitCleanup?: boolean | undefined;
+      }
+    | undefined;
 }
 
 export interface Groundwork<
@@ -125,6 +143,7 @@ export interface Groundwork<
   /** Also accepts groundwork's own `api_key.*` actions, which API-key changes record. */
   readonly audit: AuditLog<TAuditAction | ApiKeyAuditAction, TAuditEntity | "api_key">;
   readonly apiKeys: ApiKeys<TScope>;
+  readonly jobs: Jobs;
 }
 
 /** Wires every module to one database, one secret, one logger and one clock. */
@@ -249,6 +268,31 @@ export function createGroundwork<
     return apiKeys;
   }
 
+  let jobs: Jobs | undefined;
+  function getJobs(): Jobs {
+    if (jobs) return jobs;
+    if (tables.jobs === undefined) throw missingTable("jobs", "jobs");
+    if (tables.jobSchedules === undefined) throw missingTable("jobs", "jobSchedules");
+    const config = options.jobs ?? {};
+    jobs = createJobs({
+      db,
+      table: tables.jobs,
+      schedulesTable: tables.jobSchedules,
+      lease: config.lease,
+      workerId: config.workerId,
+      clock,
+      logger,
+    });
+    const canRateLimit = options.rateLimit?.store !== undefined || tables.rateLimits !== undefined;
+    if (config.rateLimitCleanup !== false && canRateLimit) {
+      const limiter = getRateLimit();
+      jobs.schedule("groundwork.rate-limit-cleanup", { every: "1h" }, async () => ({
+        deleted: await limiter.cleanup(),
+      }));
+    }
+    return jobs;
+  }
+
   return {
     get rateLimit() {
       return getRateLimit();
@@ -258,6 +302,9 @@ export function createGroundwork<
     },
     get apiKeys() {
       return getApiKeys();
+    },
+    get jobs() {
+      return getJobs();
     },
   };
 }

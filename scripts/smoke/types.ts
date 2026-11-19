@@ -14,6 +14,7 @@ import {
 } from "groundwork";
 import { createApiKeys, type VerifyResult } from "groundwork/api-keys";
 import { type AuditEntry, createAuditLog, diff } from "groundwork/audit";
+import { createJobs, type RunSummary, type StandardSchemaV1 } from "groundwork/jobs";
 import { createRateLimiter, type RateLimitResult, redisStore } from "groundwork/rate-limit";
 import { groundworkTables } from "groundwork/schema";
 import { createTestClock } from "groundwork/testing";
@@ -136,4 +137,37 @@ gwKeys.apiKeys.verify("key", { scopes: ["billing:read"] });
 // @ts-expect-error not a declared scope
 gwKeys.apiKeys.verify("key", { scopes: ["posts:read"] });
 
-void [window, noUnit, code, opsName, result, retry, recorded, page, verified];
+// Jobs: payloads are typed from a Standard Schema or from run's parameter.
+const { jobs: jobsTable, jobSchedules } = groundworkTables();
+const jobs = createJobs({ db: jsDb, table: jobsTable, schedulesTable: jobSchedules });
+declare const orderSchema: StandardSchemaV1<
+  { orderId: string },
+  { orderId: string; copies: number }
+>;
+const receipt = jobs.define("email.receipt", {
+  schema: orderSchema,
+  maxAttempts: 5,
+  backoff: { base: "30s", max: "1h" },
+  run(payload, { signal, attempt }) {
+    const copies: number = payload.copies;
+    return { copies, attempt, aborted: signal.aborted };
+  },
+});
+receipt.enqueue({ orderId: "o1" }, { tx: jsDb, dedupeKey: "receipt:o1", delay: "5m" });
+// @ts-expect-error orderId must be a string
+receipt.enqueue({ orderId: 1 });
+const annotated = jobs.define("user.welcome", {
+  run(payload: { userId: number }) {
+    return payload.userId;
+  },
+});
+// @ts-expect-error userId must be a number
+annotated.enqueue({ userId: "x" });
+jobs.schedule("reports.nightly", { every: "1d" }, ({ scheduledAt }) => scheduledAt.toISOString());
+const worked: Promise<RunSummary> = jobs.work({
+  concurrency: 4,
+  pollInterval: "1s",
+  signal: AbortSignal.timeout(1),
+});
+
+void [window, noUnit, code, opsName, result, retry, recorded, page, verified, worked];

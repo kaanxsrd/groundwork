@@ -1,0 +1,1036 @@
+import { randomBytes } from "node:crypto";
+import { hostname } from "node:os";
+import { type SQL, sql } from "drizzle-orm";
+import { toJsonValue } from "../audit/json.ts";
+import type { Clock } from "../internal/clock.ts";
+import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
+import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
+import { GroundworkError } from "../internal/errors.ts";
+import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
+import { type StandardSchemaV1, validateWith } from "../internal/standard-schema.ts";
+import { assertTableColumns } from "../internal/table.ts";
+import {
+  JOB_COLUMNS,
+  JOB_SCHEDULE_COLUMNS,
+  type JobSchedulesTable,
+  type JobsTable,
+} from "../schema/jobs.ts";
+import { backoffDelayMs } from "./backoff.ts";
+import type {
+  EnqueueOptions,
+  EnqueueResult,
+  JobContext,
+  JobFailure,
+  JobHandle,
+  JobListFilter,
+  JobRecord,
+  JobStatus,
+  Jobs,
+  JobsHealth,
+  RunOnceOptions,
+  RunSummary,
+  ScheduleContext,
+  ScheduleOptions,
+  WorkOptions,
+} from "./types.ts";
+
+export interface JobsOptions {
+  readonly db: GroundworkDatabase;
+  /** The `jobs` table from `groundworkTables()`. */
+  readonly table: JobsTable;
+  /** The `jobSchedules` table from `groundworkTables()`. */
+  readonly schedulesTable: JobSchedulesTable;
+  /**
+   * How long a claimed job is reserved for its worker. Workers renew it while the job runs, so a
+   * job is only picked up again if its worker stops (a crash, a kill, a lost connection). Defaults
+   * to `"1m"`.
+   */
+  readonly lease?: Duration | undefined;
+  /** Identifies this worker in `locked_by`. Defaults to `<hostname>:<pid>:<random>`. */
+  readonly workerId?: string | undefined;
+  /** Defaults to Postgres's time. Inject one in tests. */
+  readonly clock?: Clock | undefined;
+  /** Defaults to `console` (warnings and errors only). */
+  readonly logger?: Logger | undefined;
+  /** For tests: the random source for backoff jitter. Defaults to `Math.random`. */
+  readonly random?: (() => number) | undefined;
+}
+
+const NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,100}$/;
+const SCHEDULE_PREFIX = "schedule:";
+const MAX_LIST = 1_000;
+const PRUNE_BATCH = 5_000;
+const MAX_ERROR_LENGTH = 2_000;
+
+interface Handler {
+  readonly type: string;
+  readonly schema: StandardSchemaV1 | undefined;
+  readonly run: (payload: unknown, context: JobContext) => unknown;
+  readonly onExhausted:
+    | ((payload: unknown, failure: JobFailure, context: JobContext) => unknown)
+    | undefined;
+  readonly maxAttempts: number;
+  readonly backoffBaseMs: number;
+  readonly backoffMaxMs: number;
+  readonly timeoutMs: number | null;
+  readonly priority: number;
+  /** Set for schedule jobs: the schedule's name. */
+  readonly schedule: string | undefined;
+}
+
+interface ScheduleEntry {
+  readonly name: string;
+  readonly every: Duration;
+  readonly everyMs: number;
+  readonly maxAttempts: number;
+}
+
+interface StoredJob {
+  id: string;
+  type: string;
+  payload: unknown;
+  status: JobStatus;
+  priority: number;
+  attempts: number;
+  max_attempts: number;
+  run_at: number;
+  locked_until: number | null;
+  locked_by: string | null;
+  dedupe_key: string | null;
+  last_error: string | null;
+  result: unknown;
+  created_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+  updated_at: number;
+}
+
+const ms = (column: string) => `(extract(epoch from ${column}) * 1000)::float8`;
+
+const RECORD = sql.raw(`jsonb_build_object(
+  'id', j.id::text, 'type', j.type, 'payload', j.payload, 'status', j.status, 'priority', j.priority,
+  'attempts', j.attempts, 'max_attempts', j.max_attempts, 'run_at', ${ms("j.run_at")},
+  'locked_until', ${ms("j.locked_until")}, 'locked_by', j.locked_by, 'dedupe_key', j.dedupe_key,
+  'last_error', j.last_error, 'result', j.result, 'created_at', ${ms("j.created_at")},
+  'started_at', ${ms("j.started_at")}, 'completed_at', ${ms("j.completed_at")}, 'updated_at', ${ms("j.updated_at")}
+)::text`);
+
+const toDate = (value: number | null) => (value === null ? null : new Date(value));
+
+function toRecord(row: StoredJob): JobRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    payload: row.payload,
+    priority: row.priority,
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    runAt: new Date(row.run_at),
+    lockedUntil: toDate(row.locked_until),
+    lockedBy: row.locked_by,
+    dedupeKey: row.dedupe_key,
+    lastError: row.last_error,
+    result: row.result,
+    createdAt: new Date(row.created_at),
+    startedAt: toDate(row.started_at),
+    completedAt: toDate(row.completed_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+function validateName(value: unknown, label: string): string {
+  if (typeof value !== "string" || !NAME_PATTERN.test(value)) {
+    throw new GroundworkError(
+      "invalid_config",
+      `Invalid ${label} ${JSON.stringify(value)}: use 1 to 100 letters, digits or _ . : - (for example "email.receipt").`,
+    );
+  }
+  return value;
+}
+
+function positiveInt(
+  value: unknown,
+  label: string,
+  code: "invalid_config" | "invalid_argument",
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new GroundworkError(code, `${label} must be a positive integer.`);
+  }
+  return value as number;
+}
+
+function integer(
+  value: unknown,
+  label: string,
+  code: "invalid_config" | "invalid_argument",
+): number {
+  if (!Number.isSafeInteger(value) || Math.abs(value as number) > 1_000_000) {
+    throw new GroundworkError(
+      code,
+      `${label} must be an integer between -1,000,000 and 1,000,000.`,
+    );
+  }
+  return value as number;
+}
+
+function errorText(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) return { name: error.name, message: error.message };
+  return { name: "Error", message: String(error) };
+}
+
+/**
+ * Creates background jobs and schedules on your Postgres.
+ *
+ * ```ts
+ * const jobs = createJobs({ db, table: tables.jobs, schedulesTable: tables.jobSchedules });
+ * export const sendReceipt = jobs.define("email.receipt", {
+ *   schema: z.object({ orderId: z.string() }),
+ *   async run({ orderId }, { signal }) { await mailer.send(orderId, { signal }); },
+ * });
+ * await sendReceipt.enqueue({ orderId }, { tx, dedupeKey: `receipt:${orderId}` });
+ * await jobs.work({ signal });
+ * ```
+ */
+export function createJobs(options: JobsOptions): Jobs {
+  if (typeof options !== "object" || options === null) {
+    throw new GroundworkError("invalid_config", "createJobs needs an options object.");
+  }
+  const { db, table, schedulesTable, clock } = options;
+  if (!db || typeof db.execute !== "function") {
+    throw new GroundworkError("invalid_config", "db must be a Drizzle Postgres database.");
+  }
+  assertTableColumns(table, JOB_COLUMNS, "jobs table from groundworkTables()");
+  assertTableColumns(
+    schedulesTable,
+    JOB_SCHEDULE_COLUMNS,
+    "jobSchedules table from groundworkTables()",
+  );
+  const leaseMs = parseDuration(options.lease ?? "1m", { label: "lease", minMs: 1_000 });
+  const workerId =
+    options.workerId ?? `${hostname()}:${process.pid}:${randomBytes(3).toString("hex")}`;
+  if (typeof workerId !== "string" || workerId === "") {
+    throw new GroundworkError("invalid_config", "workerId must be a non-empty string.");
+  }
+  const random = options.random ?? Math.random;
+  const logger = options.logger ?? consoleLogger;
+  const once = createOnceLogger(logger);
+
+  const handlers = new Map<string, Handler>();
+  const schedules = new Map<string, ScheduleEntry>();
+  let schedulesSynced = false;
+
+  /** The time a statement works with: the injected clock, else Postgres's `now()`. */
+  const now = (): SQL => (clock ? sql`${clock.now().toISOString()}::timestamptz` : sql`now()`);
+  const lease = sql`${leaseMs}::float8 * interval '1 millisecond'`;
+
+  function addHandler(
+    type: string,
+    definition: Record<string, unknown>,
+    defaults: { maxAttempts: number; base: Duration; max: Duration; timeout: Duration },
+    schedule?: string,
+  ): Handler {
+    if (handlers.has(type)) {
+      throw new GroundworkError(
+        "invalid_config",
+        `Job type "${type}" is already defined; define each type once.`,
+      );
+    }
+    if (typeof definition.run !== "function") {
+      throw new GroundworkError("invalid_config", `Job type "${type}" needs a run function.`);
+    }
+    const schema = definition.schema as StandardSchemaV1 | undefined;
+    if (schema !== undefined && typeof schema?.["~standard"]?.validate !== "function") {
+      throw new GroundworkError(
+        "invalid_config",
+        `The schema of job type "${type}" isn't a Standard Schema (zod, valibot, arktype…).`,
+      );
+    }
+    if (definition.onExhausted !== undefined && typeof definition.onExhausted !== "function") {
+      throw new GroundworkError(
+        "invalid_config",
+        `onExhausted of job type "${type}" must be a function.`,
+      );
+    }
+    const backoff = (definition.backoff ?? {}) as { base?: unknown; max?: unknown };
+    const timeout = definition.timeout === undefined ? defaults.timeout : definition.timeout;
+    const handler: Handler = {
+      type,
+      schema,
+      run: definition.run as Handler["run"],
+      onExhausted: definition.onExhausted as Handler["onExhausted"],
+      maxAttempts:
+        definition.maxAttempts === undefined
+          ? defaults.maxAttempts
+          : positiveInt(definition.maxAttempts, `maxAttempts of "${type}"`, "invalid_config"),
+      backoffBaseMs: parseDuration((backoff.base ?? defaults.base) as Duration, {
+        label: `backoff.base of "${type}"`,
+      }),
+      backoffMaxMs: parseDuration((backoff.max ?? defaults.max) as Duration, {
+        label: `backoff.max of "${type}"`,
+      }),
+      timeoutMs:
+        timeout === false
+          ? null
+          : parseDuration(timeout as Duration, { label: `timeout of "${type}"`, minMs: 1 }),
+      priority:
+        definition.priority === undefined
+          ? 0
+          : integer(definition.priority, `priority of "${type}"`, "invalid_config"),
+      schedule,
+    };
+    handlers.set(type, handler);
+    return handler;
+  }
+
+  async function payloadFor(handler: Handler, payload: unknown): Promise<unknown> {
+    if (handler.schema) {
+      const checked = await validateWith(handler.schema, payload);
+      if (!checked.ok) {
+        throw new GroundworkError(
+          "invalid_argument",
+          `Invalid payload for job type "${handler.type}": ${checked.message}`,
+        );
+      }
+    }
+    return toJsonValue(payload);
+  }
+
+  async function enqueue(
+    handler: Handler,
+    payload: unknown,
+    enqueueOptions: EnqueueOptions = {},
+  ): Promise<EnqueueResult> {
+    const json = await payloadFor(handler, payload);
+    const priority =
+      enqueueOptions.priority === undefined
+        ? handler.priority
+        : integer(enqueueOptions.priority, "priority", "invalid_argument");
+    const maxAttempts =
+      enqueueOptions.maxAttempts === undefined
+        ? handler.maxAttempts
+        : positiveInt(enqueueOptions.maxAttempts, "maxAttempts", "invalid_argument");
+    const dedupeKey = enqueueOptions.dedupeKey ?? null;
+    if (
+      dedupeKey !== null &&
+      (typeof dedupeKey !== "string" || dedupeKey === "" || dedupeKey.length > 500)
+    ) {
+      throw new GroundworkError(
+        "invalid_argument",
+        "dedupeKey must be a non-empty string of at most 500 characters.",
+      );
+    }
+    if (enqueueOptions.runAt !== undefined && enqueueOptions.delay !== undefined) {
+      throw new GroundworkError("invalid_argument", "Pass runAt or delay, not both.");
+    }
+    let runAt: SQL = sql`input.now`;
+    if (enqueueOptions.runAt !== undefined) {
+      if (!(enqueueOptions.runAt instanceof Date) || Number.isNaN(enqueueOptions.runAt.getTime())) {
+        throw new GroundworkError("invalid_argument", "runAt must be a valid Date.");
+      }
+      runAt = sql`${enqueueOptions.runAt.toISOString()}::timestamptz`;
+    } else if (enqueueOptions.delay !== undefined) {
+      const delayMs = parseDuration(enqueueOptions.delay, { label: "delay" });
+      runAt = sql`input.now + ${delayMs}::float8 * interval '1 millisecond'`;
+    }
+
+    const target = enqueueOptions.tx ?? db;
+    const rows = rowsOf<{ id: string; created: boolean }>(
+      await target.execute(sql`
+        with input as materialized (select ${now()} as now),
+        inserted as (
+          insert into ${table} as j (type, payload, priority, max_attempts, run_at, dedupe_key, created_at, updated_at)
+          select ${handler.type}::text, ${JSON.stringify(json)}::jsonb, ${priority}::int, ${maxAttempts}::int,
+            ${runAt}, ${dedupeKey}::text, input.now, input.now
+          from input
+          on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
+          returning j.id::text as id
+        )
+        select id, true as created from inserted
+        union all
+        select j.id::text, false from ${table} j
+        where ${dedupeKey}::text is not null and j.type = ${handler.type}::text and j.dedupe_key = ${dedupeKey}::text
+          and j.status in ('pending', 'running') and not exists (select 1 from inserted)
+        limit 1`),
+    );
+    const row = rows[0];
+    if (row) return { id: row.id, created: row.created === true };
+    // The duplicate committed after this statement's snapshot was taken: look it up again.
+    const [existing] = rowsOf<{ id: string }>(
+      await target.execute(
+        sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text and status in ('pending', 'running') limit 1`,
+      ),
+    );
+    if (!existing)
+      throw new Error("enqueue found neither a new job nor the duplicate it collided with");
+    return { id: existing.id, created: false };
+  }
+
+  // ── Schedules ──────────────────────────────────────────────────────────────
+
+  const scheduleValues = () =>
+    sql.join(
+      [...schedules.values()].map(
+        (s) =>
+          sql`(${s.name}::text, ${s.every}::text, ${s.everyMs}::float8, ${s.maxAttempts}::int)`,
+      ),
+      sql`, `,
+    );
+
+  async function syncSchedules(): Promise<void> {
+    if (schedulesSynced || schedules.size === 0) return;
+    // New schedules are due at once; existing ones keep their next run.
+    await db.execute(sql`
+      insert into ${schedulesTable} (name, every, next_run_at, created_at, updated_at)
+      select v.name, v.every, ${now()}, ${now()}, ${now()}
+      from (values ${scheduleValues()}) as v(name, every, every_ms, max_attempts)
+      on conflict (name) do update set every = excluded.every, updated_at = excluded.updated_at
+      where ${schedulesTable}.every is distinct from excluded.every`);
+    schedulesSynced = true;
+  }
+
+  /**
+   * One statement per tick: move each due schedule's next run forward (a conditional update, so
+   * of several instances only one wins) and enqueue its job. The job's dedupe key skips a tick
+   * while the previous one is still pending or running.
+   */
+  async function tickSchedules(): Promise<number> {
+    if (schedules.size === 0) return 0;
+    await syncSchedules();
+    const [row] = rowsOf<{ enqueued: unknown }>(
+      await db.execute(sql`
+        with input as materialized (select ${now()} as now),
+        v (name, every, every_ms, max_attempts) as (values ${scheduleValues()}),
+        due as (
+          update ${schedulesTable} as s
+          set next_run_at = input.now + v.every_ms * interval '1 millisecond', last_run_at = input.now, updated_at = input.now
+          from input, v
+          where s.name = v.name and s.next_run_at <= input.now
+          returning s.name, v.max_attempts
+        ),
+        enqueued as (
+          insert into ${table} (type, payload, max_attempts, run_at, dedupe_key, created_at, updated_at)
+          select ${SCHEDULE_PREFIX} || due.name,
+            jsonb_build_object('scheduledAt', to_char(input.now at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+            due.max_attempts, input.now, 'tick', input.now, input.now
+          from due, input
+          on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
+          returning 1
+        )
+        select (select count(*) from enqueued)::int as enqueued`),
+    );
+    return row ? toNumber(row.enqueued) : 0;
+  }
+
+  // ── Running jobs ───────────────────────────────────────────────────────────
+
+  async function claim(limit: number): Promise<StoredJob[]> {
+    const types = [...handlers.keys()];
+    if (types.length === 0 || limit < 1) return [];
+    const rows = rowsOf<{ record: string }>(
+      await db.execute(sql`
+        with input as materialized (select ${now()} as now),
+        candidates as (
+          select c.id from ${table} c, input
+          where c.status in ('pending', 'running') and c.run_at <= input.now
+            and c.type in (${sql.join(
+              types.map((type) => sql`${type}::text`),
+              sql`, `,
+            )})
+          order by c.priority desc nulls last, c.run_at, c.id
+          limit ${limit}
+          for update of c skip locked
+        )
+        update ${table} as j
+        set status = 'running', attempts = j.attempts + 1, locked_by = ${workerId}::text,
+          locked_until = input.now + ${lease}, run_at = input.now + ${lease},
+          started_at = coalesce(j.started_at, input.now), updated_at = input.now
+        from candidates, input
+        where j.id = candidates.id
+        returning ${RECORD} as record`),
+    );
+    return rows.map((row) => JSON.parse(row.record) as StoredJob);
+  }
+
+  /** Only the worker holding the latest attempt may change a running job. */
+  const owned = (job: StoredJob) =>
+    sql`j.id = ${job.id}::uuid and j.status = 'running' and j.locked_by = ${workerId}::text and j.attempts = ${job.attempts}::int`;
+
+  async function extendLease(job: StoredJob): Promise<boolean> {
+    const rows = rowsOf(
+      await db.execute(sql`
+        update ${table} as j set locked_until = ${now()} + ${lease}, run_at = ${now()} + ${lease}, updated_at = ${now()}
+        where ${owned(job)} returning 1`),
+    );
+    return rows.length > 0;
+  }
+
+  async function complete(job: StoredJob, handler: Handler, result: unknown): Promise<boolean> {
+    const scheduleUpdate = handler.schedule
+      ? sql`, touched as (
+          update ${schedulesTable} set last_success_at = ${now()}, last_error = null, updated_at = ${now()}
+          where name = ${handler.schedule}::text and exists (select 1 from done))`
+      : sql``;
+    const [row] = rowsOf<{ done: unknown }>(
+      await db.execute(sql`
+        with done as (
+          update ${table} as j set status = 'completed', completed_at = ${now()}, result = ${JSON.stringify(toJsonValue(result))}::jsonb,
+            last_error = null, locked_by = null, locked_until = null, updated_at = ${now()}
+          where ${owned(job)} returning 1
+        )${scheduleUpdate}
+        select count(*)::int as done from done`),
+    );
+    return row !== undefined && toNumber(row.done) === 1;
+  }
+
+  async function fail(
+    job: StoredJob,
+    handler: Handler,
+    error: unknown,
+    permanent: boolean,
+  ): Promise<"retried" | "failed" | "lost"> {
+    const { name, message } = errorText(error);
+    const lastError = `${name}: ${message}`.slice(0, MAX_ERROR_LENGTH);
+    const exhausted = permanent || job.attempts >= job.max_attempts;
+    const delayMs = exhausted
+      ? 0
+      : backoffDelayMs(job.attempts, handler.backoffBaseMs, handler.backoffMaxMs, random);
+    const scheduleUpdate = handler.schedule
+      ? sql`, touched as (
+          update ${schedulesTable} set last_failure_at = ${now()}, last_error = ${lastError}::text, updated_at = ${now()}
+          where name = ${handler.schedule}::text and exists (select 1 from done))`
+      : sql``;
+    const [row] = rowsOf<{ done: unknown }>(
+      await db.execute(sql`
+        with done as (
+          update ${table} as j set
+            status = ${exhausted ? "failed" : "pending"}::text,
+            run_at = ${exhausted ? sql`j.run_at` : sql`${now()} + ${delayMs}::float8 * interval '1 millisecond'`},
+            completed_at = ${exhausted ? now() : sql`null`},
+            last_error = ${lastError}::text, locked_by = null, locked_until = null, updated_at = ${now()}
+          where ${owned(job)} returning 1
+        )${scheduleUpdate}
+        select count(*)::int as done from done`),
+    );
+    if (!row || toNumber(row.done) !== 1) return "lost";
+    const context = { type: job.type, id: job.id, attempt: job.attempts, error: { name, message } };
+    if (exhausted) {
+      logger.error(`Job "${job.type}" failed for good after ${job.attempts} attempt(s).`, context);
+    } else {
+      logger.warn(`Job "${job.type}" failed; retrying in ${Math.ceil(delayMs / 1000)}s.`, context);
+    }
+    return exhausted ? "failed" : "retried";
+  }
+
+  interface Counters {
+    claimed: number;
+    completed: number;
+    retried: number;
+    failed: number;
+    scheduled: number;
+  }
+
+  async function execute(job: StoredJob, counters: Counters): Promise<void> {
+    const handler = handlers.get(job.type);
+    if (!handler) return; // claim only selects known types
+    const controller = new AbortController();
+    const context: JobContext | ScheduleContext = {
+      id: job.id,
+      type: job.type,
+      attempt: job.attempts,
+      maxAttempts: job.max_attempts,
+      signal: controller.signal,
+      createdAt: new Date(job.created_at),
+      ...(handler.schedule
+        ? {
+            scheduledAt: new Date(
+              String((job.payload as { scheduledAt?: string })?.scheduledAt ?? job.created_at),
+            ),
+          }
+        : {}),
+    };
+    const record = (outcome: "retried" | "failed" | "lost") => {
+      if (outcome === "lost") {
+        logger.warn(
+          `Job "${job.type}" finished after this worker lost its lease; another worker owns it now.`,
+          {
+            type: job.type,
+            id: job.id,
+            attempt: job.attempts,
+          },
+        );
+      } else counters[outcome]++;
+    };
+    const runExhausted = async (payload: unknown, error: unknown) => {
+      if (!handler.onExhausted) return;
+      try {
+        await handler.onExhausted(payload, { ...errorText(error), attempt: job.attempts }, context);
+      } catch (hookError) {
+        logger.error(`onExhausted of job "${job.type}" threw.`, {
+          id: job.id,
+          error: errorText(hookError),
+        });
+      }
+    };
+
+    // Its worker stopped during the last attempt (the lease ran out): that attempt counts.
+    if (job.attempts > job.max_attempts) {
+      const error = new Error("The worker running the last attempt stopped before finishing.");
+      record(await fail(job, handler, error, true));
+      await runExhausted(job.payload, error);
+      return;
+    }
+
+    let payload = job.payload;
+    if (handler.schema) {
+      const checked = await validateWith(handler.schema, job.payload);
+      if (!checked.ok) {
+        // A payload that doesn't validate never will: fail now instead of retrying.
+        const error = new GroundworkError(
+          "invalid_argument",
+          `Invalid payload: ${checked.message}`,
+        );
+        record(await fail(job, handler, error, true));
+        await runExhausted(job.payload, error);
+        return;
+      }
+      payload = checked.value;
+    }
+
+    const timer =
+      handler.timeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+            const error = new Error(`Timed out after ${handler.timeoutMs}ms.`);
+            error.name = "TimeoutError";
+            controller.abort(error);
+          }, handler.timeoutMs);
+    const heartbeat = setInterval(
+      () => {
+        extendLease(job)
+          .then((kept) => {
+            if (!kept && !controller.signal.aborted) {
+              const error = new Error("This worker lost the job's lease.");
+              error.name = "LeaseLostError";
+              controller.abort(error);
+            }
+          })
+          .catch((error: unknown) => {
+            once.once("warn", "heartbeat", "Could not renew a job lease; retrying.", {
+              error: errorText(error),
+            });
+          });
+      },
+      Math.max(1_000, Math.floor(leaseMs / 3)),
+    );
+    try {
+      const running = Promise.resolve().then(() => handler.run(payload, context));
+      // A handler that ignores the signal keeps running, but its outcome no longer counts.
+      running.catch(() => {});
+      const aborted = new Promise<never>((_, reject) => {
+        if (controller.signal.aborted) reject(controller.signal.reason);
+        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
+          once: true,
+        });
+      });
+      aborted.catch(() => {});
+      const result = await Promise.race([running, aborted]);
+      if (await complete(job, handler, result)) counters.completed++;
+      else record("lost");
+    } catch (error) {
+      const outcome = await fail(job, handler, error, false);
+      record(outcome);
+      if (outcome === "failed") await runExhausted(payload, error);
+    } finally {
+      clearTimeout(timer);
+      clearInterval(heartbeat);
+    }
+  }
+
+  async function loop(settings: {
+    concurrency: number;
+    deadline: number | null;
+    signal: AbortSignal | undefined;
+    pollMs: number;
+    mode: "once" | "work";
+  }): Promise<RunSummary> {
+    const started = performance.now();
+    const counters: Counters = { claimed: 0, completed: 0, retried: 0, failed: 0, scheduled: 0 };
+    const inFlight = new Set<Promise<void>>();
+    const stopping = () =>
+      settings.signal?.aborted === true ||
+      (settings.deadline !== null && performance.now() >= settings.deadline);
+    let lastTick = Number.NEGATIVE_INFINITY;
+
+    const wait = (msToWait: number) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(done, msToWait);
+        settings.signal?.addEventListener("abort", done, { once: true });
+        for (const promise of inFlight) promise.then(done, done);
+        function done() {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+
+    try {
+      while (!stopping()) {
+        try {
+          if (performance.now() - lastTick >= settings.pollMs) {
+            lastTick = performance.now();
+            counters.scheduled += await tickSchedules();
+          }
+          const free = settings.concurrency - inFlight.size;
+          const claimed = free > 0 ? await claim(free) : [];
+          if (claimed.length > 0) once.reset("claim");
+          counters.claimed += claimed.length;
+          for (const job of claimed) {
+            const promise: Promise<void> = execute(job, counters).finally(() =>
+              inFlight.delete(promise),
+            );
+            inFlight.add(promise);
+          }
+          if (inFlight.size >= settings.concurrency) {
+            await Promise.race(inFlight);
+          } else if (claimed.length < free) {
+            // Nothing more is due right now.
+            if (settings.mode === "once") {
+              if (inFlight.size === 0) break;
+              await Promise.race(inFlight); // a finishing job may have enqueued another
+            } else {
+              await wait(settings.pollMs);
+            }
+          }
+        } catch (error) {
+          if (settings.mode === "once") throw error;
+          once.once(
+            "error",
+            "claim",
+            "The job worker could not reach the database; it keeps retrying.",
+            {
+              error: errorText(error),
+            },
+          );
+          await wait(settings.pollMs);
+        }
+      }
+    } finally {
+      await Promise.allSettled([...inFlight]);
+    }
+    return { ...counters, durationMs: Math.round(performance.now() - started) };
+  }
+
+  const validConcurrency = (value: unknown) =>
+    value === undefined ? 4 : positiveInt(value, "concurrency", "invalid_argument");
+  const validId = (id: unknown): id is string =>
+    typeof id === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  const jobs: Jobs = {
+    define(type: string, definition: object) {
+      validateName(type, "job type");
+      if (type.startsWith(SCHEDULE_PREFIX)) {
+        throw new GroundworkError(
+          "invalid_config",
+          `Job types can't start with "${SCHEDULE_PREFIX}"; that prefix is for schedules.`,
+        );
+      }
+      if (typeof definition !== "object" || definition === null) {
+        throw new GroundworkError(
+          "invalid_config",
+          `Job type "${type}" needs a definition object.`,
+        );
+      }
+      const handler = addHandler(type, definition as Record<string, unknown>, {
+        maxAttempts: 5,
+        base: "30s",
+        max: "1h",
+        timeout: "5m",
+      });
+      return {
+        type,
+        enqueue: (payload: unknown, enqueueOptions?: EnqueueOptions) =>
+          enqueue(handler, payload, enqueueOptions),
+      } as JobHandle<string, unknown>;
+    },
+
+    schedule(name, scheduleOptions: ScheduleOptions, run) {
+      validateName(name, "schedule name");
+      if (schedules.has(name)) {
+        throw new GroundworkError("invalid_config", `Schedule "${name}" is already defined.`);
+      }
+      if (
+        typeof scheduleOptions !== "object" ||
+        scheduleOptions === null ||
+        !isDuration(scheduleOptions.every)
+      ) {
+        throw new GroundworkError(
+          "invalid_config",
+          `Schedule "${name}" needs { every }, such as "1h".`,
+        );
+      }
+      const everyMs = parseDuration(scheduleOptions.every, {
+        label: `every of schedule "${name}"`,
+        minMs: 1_000,
+      });
+      const handler = addHandler(
+        `${SCHEDULE_PREFIX}${name}`,
+        {
+          ...scheduleOptions,
+          run: (_payload: unknown, context: JobContext) => run(context as ScheduleContext),
+        },
+        { maxAttempts: 3, base: "5s", max: "1m", timeout: "5m" },
+        name,
+      );
+      schedules.set(name, {
+        name,
+        every: scheduleOptions.every,
+        everyMs,
+        maxAttempts: handler.maxAttempts,
+      });
+      schedulesSynced = false;
+    },
+
+    async trigger(name) {
+      if (!schedules.has(name)) return false;
+      await syncSchedules();
+      const rows = rowsOf(
+        await db.execute(
+          sql`update ${schedulesTable} set next_run_at = ${now()}, updated_at = ${now()} where name = ${name}::text returning 1`,
+        ),
+      );
+      return rows.length > 0;
+    },
+
+    runOnce(runOptions: RunOnceOptions = {}) {
+      const budgetMs = runOptions.budgetMs ?? 10_000;
+      if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+        throw new GroundworkError(
+          "invalid_argument",
+          "budgetMs must be a positive number of milliseconds.",
+        );
+      }
+      return loop({
+        concurrency: validConcurrency(runOptions.concurrency),
+        deadline: performance.now() + budgetMs,
+        signal: undefined,
+        pollMs: 0,
+        mode: "once",
+      });
+    },
+
+    work(workOptions: WorkOptions = {}) {
+      return loop({
+        concurrency: validConcurrency(workOptions.concurrency),
+        deadline: null,
+        signal: workOptions.signal,
+        pollMs: parseDuration(workOptions.pollInterval ?? "1s", {
+          label: "pollInterval",
+          minMs: 10,
+        }),
+        mode: "work",
+      });
+    },
+
+    async get(id) {
+      if (!validId(id)) return null;
+      const [row] = rowsOf<{ record: string }>(
+        await db.execute(sql`select ${RECORD} as record from ${table} j where j.id = ${id}::uuid`),
+      );
+      return row ? toRecord(JSON.parse(row.record) as StoredJob) : null;
+    },
+
+    async list(filter: JobListFilter = {}) {
+      const limit = filter.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST) {
+        throw new GroundworkError(
+          "invalid_argument",
+          `limit must be an integer from 1 to ${MAX_LIST}.`,
+        );
+      }
+      const conditions: SQL[] = [];
+      const listOf = (value: string | readonly string[]) =>
+        (Array.isArray(value) ? value : [value]) as string[];
+      const inList = (column: string, values: string[]) =>
+        values.length === 0
+          ? sql`false`
+          : sql`${sql.raw(column)} in (${sql.join(
+              values.map((v) => sql`${v}::text`),
+              sql`, `,
+            )})`;
+      if (filter.type !== undefined) conditions.push(inList("j.type", listOf(filter.type)));
+      if (filter.status !== undefined) conditions.push(inList("j.status", listOf(filter.status)));
+      if (filter.since !== undefined) {
+        if (!(filter.since instanceof Date) || Number.isNaN(filter.since.getTime())) {
+          throw new GroundworkError("invalid_argument", "since must be a valid Date.");
+        }
+        conditions.push(sql`j.created_at >= ${filter.since.toISOString()}::timestamptz`);
+      }
+      const where =
+        conditions.length === 0 ? sql`` : sql`where ${sql.join(conditions, sql` and `)}`;
+      const rows = rowsOf<{ record: string }>(
+        await db.execute(
+          sql`select ${RECORD} as record from ${table} j ${where} order by j.created_at desc, j.id desc limit ${limit}`,
+        ),
+      );
+      return rows.map((row) => toRecord(JSON.parse(row.record) as StoredJob));
+    },
+
+    async retry(id) {
+      if (!validId(id)) return false;
+      try {
+        const rows = rowsOf(
+          await db.execute(sql`
+            update ${table} set status = 'pending', attempts = 0, run_at = ${now()}, completed_at = null,
+              locked_by = null, locked_until = null, updated_at = ${now()}
+            where id = ${id}::uuid and status in ('failed', 'cancelled') returning 1`),
+        );
+        return rows.length > 0;
+      } catch (error) {
+        // Another job with the same dedupe key is already pending or running.
+        const code =
+          (error as { code?: unknown; cause?: { code?: unknown } })?.code ??
+          (error as { cause?: { code?: unknown } })?.cause?.code;
+        if (code === "23505") return false;
+        throw error;
+      }
+    },
+
+    async cancel(id) {
+      if (!validId(id)) return false;
+      const rows = rowsOf(
+        await db.execute(sql`
+          update ${table} set status = 'cancelled', completed_at = ${now()}, updated_at = ${now()}
+          where id = ${id}::uuid and status = 'pending' returning 1`),
+      );
+      return rows.length > 0;
+    },
+
+    async prune(pruneOptions) {
+      if (typeof pruneOptions !== "object" || pruneOptions === null) {
+        throw new GroundworkError(
+          "invalid_argument",
+          'prune needs { completedOlderThan }, such as "7d".',
+        );
+      }
+      const completedMs = parseDuration(pruneOptions.completedOlderThan, {
+        label: "completedOlderThan",
+        minMs: 1,
+      });
+      const failedMs =
+        pruneOptions.failedOlderThan === undefined
+          ? completedMs
+          : parseDuration(pruneOptions.failedOlderThan, { label: "failedOlderThan", minMs: 1 });
+      let total = 0;
+      for (;;) {
+        const [row] = rowsOf<{ deleted: unknown }>(
+          await db.execute(sql`
+            with input as materialized (select ${now()} as now),
+            doomed as (
+              select j.id from ${table} j, input
+              where (j.status in ('completed', 'cancelled') and j.completed_at < input.now - ${completedMs}::float8 * interval '1 millisecond')
+                 or (j.status = 'failed' and j.completed_at < input.now - ${failedMs}::float8 * interval '1 millisecond')
+              limit ${PRUNE_BATCH}
+            ),
+            deleted as (delete from ${table} where id in (select id from doomed) returning 1)
+            select count(*)::int as deleted from deleted`),
+        );
+        const deleted = row ? toNumber(row.deleted) : 0;
+        total += deleted;
+        if (deleted < PRUNE_BATCH) return total;
+      }
+    },
+
+    async health(): Promise<JobsHealth> {
+      await syncSchedules();
+      const typeRows = rowsOf<{
+        type: string;
+        pending: unknown;
+        running: unknown;
+        failed_24h: unknown;
+        oldest_pending_age_ms: unknown;
+        last_success: unknown;
+      }>(
+        await db.execute(sql`
+          with input as materialized (select ${now()} as now)
+          select j.type,
+            count(*) filter (where j.status = 'pending')::int as pending,
+            count(*) filter (where j.status = 'running')::int as running,
+            count(*) filter (where j.status = 'failed' and j.completed_at > input.now - interval '24 hours')::int as failed_24h,
+            ${sql.raw(ms("input.now"))} - ${sql.raw(ms("min(j.run_at) filter (where j.status = 'pending' and j.run_at <= input.now)"))} as oldest_pending_age_ms,
+            ${sql.raw(ms("max(j.completed_at) filter (where j.status = 'completed')"))} as last_success
+          from ${table} j, input
+          group by j.type, input.now`),
+      );
+      const byType = new Map(typeRows.map((row) => [row.type, row]));
+      const known = [...new Set([...handlers.keys(), ...byType.keys()])].sort();
+      const types = known.map((type) => {
+        const row = byType.get(type);
+        const number = (value: unknown) =>
+          value === null || value === undefined ? 0 : toNumber(value);
+        return {
+          type,
+          pending: number(row?.pending),
+          running: number(row?.running),
+          failedLast24h: number(row?.failed_24h),
+          oldestPendingAgeMs:
+            row?.oldest_pending_age_ms === null || row?.oldest_pending_age_ms === undefined
+              ? null
+              : Math.max(0, Math.round(toNumber(row.oldest_pending_age_ms))),
+          lastSuccessAt:
+            row?.last_success === null || row?.last_success === undefined
+              ? null
+              : new Date(toNumber(row.last_success)),
+        };
+      });
+
+      const names = [...schedules.keys()];
+      const scheduleRows =
+        names.length === 0
+          ? []
+          : rowsOf<{
+              name: string;
+              every: string;
+              next_run_at: unknown;
+              last_run_at: unknown;
+              last_success_at: unknown;
+              last_failure_at: unknown;
+              last_error: string | null;
+              now: unknown;
+            }>(
+              await db.execute(sql`
+                with input as materialized (select ${now()} as now)
+                select s.name, s.every, ${sql.raw(ms("s.next_run_at"))} as next_run_at, ${sql.raw(ms("s.last_run_at"))} as last_run_at,
+                  ${sql.raw(ms("s.last_success_at"))} as last_success_at, ${sql.raw(ms("s.last_failure_at"))} as last_failure_at,
+                  s.last_error, ${sql.raw(ms("input.now"))} as now
+                from ${schedulesTable} s, input
+                where s.name in (${sql.join(
+                  names.map((name) => sql`${name}::text`),
+                  sql`, `,
+                )})
+                order by s.name`),
+            );
+      const optionalDate = (value: unknown) =>
+        value === null || value === undefined ? null : new Date(toNumber(value));
+      const schedulesHealth = scheduleRows.map((row) => {
+        const entry = schedules.get(row.name);
+        const lastSuccess = optionalDate(row.last_success_at);
+        return {
+          name: row.name,
+          every: (entry?.every ?? row.every) as Duration,
+          nextRunAt: new Date(toNumber(row.next_run_at)),
+          lastRunAt: optionalDate(row.last_run_at),
+          lastSuccessAt: lastSuccess,
+          lastFailureAt: optionalDate(row.last_failure_at),
+          lastError: row.last_error,
+          healthy:
+            lastSuccess !== null &&
+            entry !== undefined &&
+            toNumber(row.now) - lastSuccess.getTime() < entry.everyMs * 3,
+        };
+      });
+      return { types, schedules: schedulesHealth };
+    },
+  };
+  return jobs;
+}

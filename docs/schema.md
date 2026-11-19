@@ -6,7 +6,7 @@ groundwork's tables live in your Drizzle schema. You export them, and your drizz
 // src/db/schema/groundwork.ts
 import { groundworkTables } from "groundwork/schema";
 
-export const { rateLimits, auditLog, apiKeys } = groundworkTables();
+export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules } = groundworkTables();
 ```
 
 Make sure drizzle-kit reads this file (it's covered by the `schema` glob in `drizzle.config.ts`), then:
@@ -90,6 +90,33 @@ One row per key. The key itself is never stored. See [API keys](api-keys.md).
 | `expires_at`, `revoked_at`, `revoked_reason`, `suspended_until`, `suspended_reason`, `rotated_at` | | Lifecycle. |
 | `last_used_at`, `last_used_ip` | | Updated at most once a minute. |
 | `created_by`, `created_at`, `updated_at` | | Bookkeeping. |
+
+### `gw_jobs`
+
+One row per job. See [background jobs](jobs.md).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | `uuid` primary key | |
+| `type` | `text` | The job type from `define()`, or `schedule:<name>` for schedule ticks. |
+| `payload`, `result` | `jsonb` | What was enqueued, and what the handler returned. |
+| `status` | `text` (check constraint) | `pending`, `running`, `completed`, `failed` or `cancelled`. Not an enum, so nothing extra has to be exported for drizzle-kit. |
+| `priority`, `attempts`, `max_attempts` | `integer` | `attempts` counts claims and fences out workers that lost their lease. |
+| `run_at` | `timestamptz` | When it's due. While running: when its lease ends, so a dead worker's job becomes due again by itself. |
+| `locked_until`, `locked_by` | | The current lease and its worker. |
+| `dedupe_key` | `text` | Unique per type while pending or running. |
+| `last_error` | `text` | The latest failure. |
+| `created_at`, `started_at`, `completed_at`, `updated_at` | `timestamptz` | |
+
+Indexes:
+
+- **claim:** `(priority desc, run_at, id)` for pending and running jobs, so a claim reads only the next few rows;
+- **dedupe:** unique `(type, dedupe_key)` while pending or running;
+- **finished:** `completed_at` for finished jobs, for `prune()`.
+
+### `gw_job_schedules`
+
+One row per schedule: `name` (primary key), `every`, `next_run_at`, `last_run_at`, `last_success_at`, `last_failure_at`, `last_error`, `created_at`, `updated_at`.
 
 ## Using the tables directly
 

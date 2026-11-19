@@ -284,6 +284,11 @@ The sketch is a direction, not a contract. Improve it if a better shape appears,
 - **Operations:**
   - `retry(id)`, `cancel(id)` and `prune({ completedOlderThan })`;
   - `health()`: per job type, the pending, running and failed (last 24h) counts, the oldest pending age and the last success. This is VaultDrop's `jobHealth`.
+- **Decided in Phase 4** (details in the Decisions log):
+  - a schedule tick runs as a job (`schedule:<name>`), so it gets retries, history and health, and overlapping ticks are skipped;
+  - leases are renewed while a handler runs, and the attempt number fences out late results;
+  - the worker uses only single statements, so no interactive transactions are needed;
+  - `trigger(name)`, `list()` and per-schedule health were added for VaultDrop parity.
 - **Must-pass tests:**
   - 8 workers and 500 jobs: every job completes exactly once;
   - a "killed" worker's jobs are recovered after the lease ends;
@@ -349,8 +354,8 @@ Don't start the next phase until I approve.
 - **Done when:** everything vante.app's `src/features/api-keys` does is possible, except country checks (out of scope).
 
 ### Phase 4: Background jobs
-- [ ] `define`/`enqueue` (in transactions), batch claim, leases, backoff, timeouts, `runOnce`, `work`, schedules, `health`, ops
-- [ ] All 6.4 must-pass tests, including the multi-worker race test
+- [x] `define`/`enqueue` (in transactions), batch claim, leases, backoff, timeouts, `runOnce`, `work`, schedules, `health`, ops
+- [x] All 6.4 must-pass tests, including the multi-worker race test
 - **Done when:** vante.app's `worker.ts` + `features/jobs` and VaultDrop's runner can both be replaced.
 
 ### Phase 5: Idempotency + Next.js helpers + example
@@ -512,6 +517,45 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   
   A first-run flake (two keys created at the same fake-clock instant tie-broke `list()` order by random UUID) was a test issue, fixed by advancing the clock. 5× reruns on both drivers: 125/125.
 - 2026-11-19: Failure results carry `prefix`, the presented key's display prefix, whenever it parsed (so for invalid keys too). vante.app logs it for failed attempts, and only having `key` (set when the record is found) would have lost that.
+- 2026-11-19 (Phase 4): The owner replied "continue" to the Phase 3 report, which I took as approval of Phase 3 and of both recommendations:
+  - API-key verify keeps up to 3 round trips;
+  - jobs are positioned as simple typed jobs in your schema, with pg-boss and graphile-worker documented as the next step.
+- 2026-11-19: `gw_jobs` follows vante.app's `jobs` columns (uuid id, type, jsonb payload, status, attempts, max_attempts default 5, run_at, last_error, created_at, completed_at).
+  - **Added:** priority, a lease (`locked_until`, `locked_by`), `dedupe_key`, a jsonb `result` (VaultDrop's run stats), `started_at`, `updated_at`.
+  - **Status:** checked `text`, because a Postgres enum would need its own export for drizzle-kit (the `pgSchema` trap again).
+  - `gw_job_schedules` holds name, every, `next_run_at`, and last run/success/failure/error.
+- 2026-11-19: Claiming:
+  - One statement, `UPDATE … FROM (SELECT … FOR UPDATE OF c SKIP LOCKED LIMIT n)`, which claims up to the free concurrency at once (vante.app claims one at a time).
+  - A claim sets `run_at` to the lease expiry, so "due" and "dead worker" are one condition, `status in (pending, running) and run_at <= now`, served by one partial index on `(priority desc, run_at, id)`. `EXPLAIN` showed adding `id` turns a bitmap scan plus sort into an ordered index scan that stops at `LIMIT` (cost 384 → 1.6 on 20k rows).
+  - Workers only claim types they've defined, so rolling deploys and mixed apps don't steal jobs.
+- 2026-11-19: Leases replace vante.app's fixed 5-minute stale-lock rule.
+  - The lease defaults to `"1m"` and is renewed every lease/3 while the handler runs, so long jobs keep their lease and dead workers lose theirs within a minute.
+  - Fencing: complete, fail and renew all require `locked_by` plus the claimed `attempts`. A late result from a worker that lost its lease is dropped and logged, and if renewal finds the lease gone the handler's signal aborts.
+  - A reclaim that pushes `attempts` past `max_attempts` fails the job without running it, because the dead worker's attempt counts.
+  - Mutation checks: removing `FOR UPDATE … SKIP LOCKED` fails the 8×500 race test, and removing fencing fails the killed-worker test.
+- 2026-11-19: Retries use capped exponential backoff with full jitter, `random(0, min(max, base × 2^(attempt−1)))`. Job defaults are `base "30s"` (vante.app's base) and `max "1h"`; schedule defaults are 3 attempts with `base "5s"`, `max "1m"`, as in VaultDrop. Timeouts default to `"5m"` and abort `context.signal`. A handler that ignores the signal keeps running, but its outcome no longer counts.
+- 2026-11-19: Payloads are validated with Standard Schema (types copied into `internal/`, as the spec allows), on enqueue and again before running.
+  - A stored payload that fails validation fails at once without retrying.
+  - Payload types come from the schema's input/output, or from `run`'s annotated parameter, through two `define` overloads.
+  - Payloads are stored as JSON (Dates become strings, which the docs call out).
+  - zod is a devDependency for tests only.
+- 2026-11-19: Schedules (`schedule(name, { every }, fn)`) run as jobs of type `schedule:<name>`, rather than inline as in VaultDrop.
+  - One statement both claims the tick, by moving `next_run_at` forward conditionally (exactly one instance wins), and enqueues the job with dedupe key `tick`, so a tick is skipped while the previous one is pending or running.
+  - Ticks get retries, timeouts, `result` (VaultDrop's stats), history and health for free. Completion and failure update the schedule's last success/failure/error in the same statement.
+  - New schedules are due at once; after that, `next = now + every`. There's no cron syntax, as planned.
+  - `trigger(name)` makes a schedule due now (VaultDrop's `?job=<name>`). `health().schedules[].healthy` follows VaultDrop's rule: a success within 3 intervals.
+- 2026-11-19: `runOnce({ budgetMs, concurrency })` stops claiming once the budget is spent and waits for running jobs. It keeps going while jobs finish, in case they enqueue follow-ups. `work()` waits `pollInterval` when idle (woken early when a job finishes). On abort it stops claiming and resolves after running jobs finish; it logs database outages once and retries. LISTEN/NOTIFY is still a later feature.
+- 2026-11-19: `createGroundwork` registers `groundwork.rate-limit-cleanup` (hourly) when rate limiting is configured, as §6.1 asked; `jobs: { rateLimitCleanup: false }` turns it off. Job pruning is left to the app, and the docs show a one-line schedule for it.
+- 2026-11-19: The plan said jobs need interactive transactions and so can't run on neon-http. The worker uses only single statements, so that limit no longer holds; I corrected the README's requirements line. Only `postgres` and `pg` are tested.
+- 2026-11-19: Not done:
+  - **Permanent dedupe.** bubblehouse-dk's outbox needs "once ever" for `(order, kind)`, while `dedupeKey` is active-only, as the plan says. It's flagged for Phase 7, and the docs suggest keeping that state in the app's own table.
+  - Batch `enqueueMany`.
+  - Job dependencies and LISTEN/NOTIFY.
+- 2026-11-19: Test-setup issues found and fixed:
+  - jobs enqueued without the workers' fake clock were in the "future" for them;
+  - advancing a fake clock by a full lease correctly expired a running tick's lease.
+  
+  Neither was a library bug.
 
 ## 11. Alternatives check (2026-11-19)
 
@@ -527,7 +571,7 @@ The Phase 0 re-check of section 1. Versions are from the npm registry. Two claim
 
 **Reasons to drop a module:** none. **To reposition:** jobs, and the fixed-window half of rate limiting. Proposals are below. None of them is applied yet, because they change the specs in section 6.
 
-1. **Jobs (6.4):** "enqueue inside your transaction" no longer sets us apart. What does: the tables live in your schema and drizzle-kit, job types are typed, the claim is a single statement with leases (graphile-worker without Pro leaves crashed jobs locked for up to 4 hours), and there's an HTTP `runOnce` for serverless. Say so in the README, and document pg-boss as the next step for workflows or very high volume. Ideas worth copying:
+1. **Jobs (6.4):** *adopted in Phase 4: `docs/jobs.md` opens with when to use pg-boss or graphile-worker instead. `jobKey` modes and OTel names are not done.* "enqueue inside your transaction" no longer sets us apart. What does: the tables live in your schema and drizzle-kit, job types are typed, the claim is a single statement with leases (graphile-worker without Pro leaves crashed jobs locked for up to 4 hours), and there's an HTTP `runOnce` for serverless. Say so in the README, and document pg-boss as the next step for workflows or very high volume. Ideas worth copying:
    - graphile-worker's `jobKey` modes (`replace`, `preserve_run_at`) for debouncing;
    - pg-boss keeps expiry and heartbeat as separate settings;
    - OpenTelemetry-compatible span names (later).

@@ -54,7 +54,7 @@ describe("package.json", () => {
       "./rate-limit": ["createRateLimiter", "memoryStore", "redisStore"],
       "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
       "./api-keys": ["API_KEY_AUDIT_ACTIONS", "apiKeyAuditEvent", "createApiKeys"],
-      "./jobs": [],
+      "./jobs": ["backoffDelayMs", "createJobs"],
       "./idempotency": [],
       "./next": [],
       "./testing": ["createTestClock"],

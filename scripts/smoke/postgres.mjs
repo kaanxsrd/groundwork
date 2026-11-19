@@ -76,6 +76,27 @@ try {
   assert.ok(!keyRow.row.includes(key.slice(17, 40)), "the key itself is never stored");
   const [entry] = (await gw.audit.query({ action: "api_key.create" })).entries;
   assert.equal(entry.entity.id, record.id);
+
+  // Jobs: enqueued in a transaction and run once; the rate-limit cleanup schedule is registered.
+  const ran = [];
+  const greet = gw.jobs.define("smoke.greet", {
+    run(payload) {
+      ran.push(payload.name);
+      return { greeted: payload.name };
+    },
+  });
+  await db.transaction(async (tx) => {
+    await greet.enqueue({ name: "node" }, { tx, dedupeKey: "greet:node" });
+  });
+  const summary = await gw.jobs.runOnce();
+  assert.equal(summary.completed, 2, "the job and the rate-limit cleanup tick");
+  assert.deepEqual(ran, ["node"]);
+  const health = await gw.jobs.health();
+  assert.ok(health.types.find((t) => t.type === "smoke.greet").lastSuccessAt instanceof Date);
+  assert.deepEqual(
+    health.schedules.map((s) => s.name),
+    ["groundwork.rate-limit-cleanup"],
+  );
   await client.end();
 } finally {
   await admin.unsafe(`drop database if exists "${name}" with (force)`);

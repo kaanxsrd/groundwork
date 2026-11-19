@@ -44,7 +44,7 @@ groundwork takes a different shape:
 | [Rate limiting](docs/rate-limiting.md): fixed window and token bucket, optional Redis | `groundwork/rate-limit` | Built, unreleased |
 | [Audit log](docs/audit.md) with diffs, redaction and keyset pagination | `groundwork/audit` | Built, unreleased |
 | [Scoped API keys](docs/api-keys.md) with rotation, CIDR allowlists and per-key limits | `groundwork/api-keys` | Built, unreleased |
-| Background jobs and schedules | `groundwork/jobs` | Planned (Phase 4) |
+| [Background jobs](docs/jobs.md) and schedules, with leases and jittered retries | `groundwork/jobs` | Built, unreleased |
 | Idempotency keys | `groundwork/idempotency` | Planned (Phase 5) |
 | Next.js route helpers | `groundwork/next` | Planned (Phase 5) |
 | Test helpers for your app | `groundwork/testing` | Started (`createTestClock`) |
@@ -52,7 +52,7 @@ groundwork takes a different shape:
 ## Requirements
 
 - PostgreSQL 16 or newer.
-- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). The jobs module needs interactive transactions, so it doesn't work over `neon-http`.
+- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`.
 - Node.js 22+ or Bun 1.4+. ESM only.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
 - Optional: Redis, only if you choose the Redis rate-limit store (tested with Redis 8, ioredis 6 and node-redis 6).
