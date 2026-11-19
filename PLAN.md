@@ -258,6 +258,12 @@ The sketch is a direction, not a contract. Improve it if a better shape appears,
 - Each key gets its own rate limit and an optional daily quota, both through 6.1.
 - `lastUsedAt`/`lastUsedIp` are written at most once a minute per key, not on every request.
 - An optional `onEvent` hook (create, rotate, revoke, suspend) writes to the audit log automatically when both modules are wired.
+- **Decided in Phase 3** (details in the Decisions log):
+  - the daily quota is a day-long window from the first request, as in vante.app;
+  - `legacyHash` keeps vante.app's existing keys working and upgrades each on first use;
+  - `gw.audit` accepts and types `api_key.*` actions automatically;
+  - `update`, `reinstate` and `delete` are audited too;
+  - `delete` (revoked keys only) and `redactKeys` were added for vante.app parity.
 - **Must-pass tests:**
   - every `reason` path;
   - the rotation grace window (old key works before it ends and fails after);
@@ -338,8 +344,8 @@ Don't start the next phase until I approve.
 - **Done when:** vante.app's and bubblehouse-dk's audit needs are covered.
 
 ### Phase 3: Scoped API keys
-- [ ] Full lifecycle, `verify`, CIDR, per-key limit and quota through Phase 1, the audit hook through Phase 2
-- [ ] All 6.3 must-pass tests
+- [x] Full lifecycle, `verify`, CIDR, per-key limit and quota through Phase 1, the audit hook through Phase 2
+- [x] All 6.3 must-pass tests
 - **Done when:** everything vante.app's `src/features/api-keys` does is possible, except country checks (out of scope).
 
 ### Phase 4: Background jobs
@@ -460,6 +466,52 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
 - 2026-11-19: `count()` and the `search`/`where` filters go beyond the plan. They cover what the apps use today: bubblehouse-dk's totals and free-text search, and its order timeline, which needs `changes->>'orderNumber'`. Both apps paginate with page numbers and offsets; groundwork offers cursors plus `count()`, which means newer/older navigation instead of page jumping. Offsets could be added later if dogfooding needs them.
 - 2026-11-19: `recordMany` is capped at 1,000 events per call, because 12 parameters per row stay far below Postgres's limit of 65,535, and it's one statement so it's all-or-none without a transaction. `prune` deletes in batches of 5,000 ordered by `(occurred_at, id)`.
 - 2026-11-19: The table-shape check is shared (`internal/table.ts`) by the rate-limit and audit modules. The smoke test now records, redacts and queries an audit entry through the packed package on Node, and type-checks typed actions on TS 5.9, 6.0 and 7.0. The fixtures gained `auditLog` and `altAuditLog` through an incremental migration (`0001_audit_log`), the way an app would adopt a new module.
+- 2026-11-19 (Phase 3): The owner replied "continue" to the Phase 2 report, which I took as approval, including the proposal that `gw.audit` accepts groundwork's `api_key.*` actions. The two open Phase 3 questions were settled by what vante.app does today, because the done criterion is vante.app parity:
+  - the daily quota is a day-long window starting at a key's first request, not calendar-aligned;
+  - existing keys keep working through `legacyHash`.
+  
+  Still open: page numbers for the audit UI, Drizzle 1.0, `PROMPT.md`, and a GitHub repo.
+- 2026-11-19: Key format: `<ns>_<12 hex>_<43 base64url>` (vante.app's), plus a 6-character base62 CRC32 suffix, as GitHub's tokens have.
+  - The HMAC covers the key without the suffix, so keys with and without a checksum verify alike and vante.app's keys parse unchanged.
+  - Parsing uses fixed-length checks only, so there's no regex backtracking.
+  - CRC32 is implemented in-house, because `zlib.crc32` needs Node 22.2 and engines say `>=22`. A test compares it with zlib, and another proves every single-character substitution of a real key is rejected (about 33k cases).
+- 2026-11-19: `gw_api_keys` columns:
+  - **From vante.app:** prefix, key hash, previous hash and expiry, scopes, rate limit, daily quota, origins, IPs, expiry, revocation, suspension, rotation, last use, `created_by`.
+  - **Added:** `owner_id` (the plan's `ownerId`) and `metadata` (vante.app's country list goes here, since country checks are out of scope).
+  - **Changed:** `rate_limit_window` is a duration string instead of vante.app's fixed per-minute column.
+  - **Indexes:** unique on `key_hash` and `prefix`, partial on `previous_key_hash`, and `(owner_id, created_at)`.
+- 2026-11-19: Every query returns the record as one `jsonb_build_object(...)` text column, so one parser serves create, get, list, update and verify, and both drivers return identical shapes. `text[]` parameters travel as JSON (`jsonb_array_elements_text` with ordinality), because Drizzle's `sql` expands JS arrays into `($1, $2)` lists. `update` reads the old row and writes the new one in one statement (a `for update` CTE plus `update`), so the audit diff is exact without needing PG 18's `RETURNING OLD`.
+- 2026-11-19: `verify` checks in vante.app's order:
+  1. parse (no DB);
+  2. one lookup that matches the current hash, the previous hash within its grace period, or the legacy hash;
+  3. timing-safe confirmation of which hash matched;
+  4. revoked, expired, suspended;
+  5. IP, then origin, before scopes, so a request from the wrong network learns nothing about scopes;
+  6. per-key rate limit, then quota, only after everything else passed.
+  
+  A key with a rate limit and a quota costs 3 round trips. Folding them into the lookup's statement is a possible optimisation; it isn't done because it would couple the API-key SQL to the Postgres rate-limit store (and rule out Redis).
+- 2026-11-19: Statuses follow vante.app: missing, malformed, invalid, revoked and expired are 401; suspended, ip_denied, origin_denied and forbidden_scope are 403; rate_limited and quota_exceeded are 429. Bodies are `{ error: { code, message, missingScopes? } }`, with RFC 6750 `WWW-Authenticate` (`invalid_token`, `insufficient_scope` with `scope="…"`), `Cache-Control: no-store`, and rate-limit headers on 429s. vante.app's error codes (`missing_api_key`, …) become the plan's reasons; its `X-RateLimit-*` headers become draft-11 headers, which dogfooding has to account for.
+- 2026-11-19: Origin checks follow vante.app: a request without `Origin` isn't held to the allowlist, because only browsers send it and anything else can forge it. Origins are canonical (`URL.origin`: lower case, default port dropped). The literal `null` origin is denied.
+- 2026-11-19: IP allowlists are CIDR (vante.app only matches exact addresses; its stored values stay valid).
+  - Everything is compared as 128 bits, with IPv4 mapped into `::ffff:0:0/96`, so IPv4 rules match the IPv4-mapped form Node reports.
+  - Strict parsing: no octal-looking octets, and host bits set (`10.0.0.1/8`) is rejected with a "did you mean" hint. Zone ids are stripped; text is canonical RFC 5952.
+  - Stored entries that fail to parse are skipped, which fails closed. 61 edge-case unit tests.
+- 2026-11-19: Per-key limits run through `gw.rateLimit`, with one rule name per kind (`<ns>:key`, `<ns>:key.daily`) and the key id as subject, so changing a key's limit keeps its counter.
+  - The default is 60 per minute (vante.app's). If no rate limiter is available, startup fails unless `defaultRateLimit: null`, so a key is never silently unlimited.
+  - Setting a limit or quota without a limiter is an `invalid_argument`.
+- 2026-11-19: `lastUsedAt`/`lastUsedIp` are updated only after a successful verify, at most once a minute per key.
+  - Two guards: an in-memory map per instance, and a SQL condition on `last_used_at`. A second instance reads the fresh timestamp and skips, as a test shows.
+  - The write runs in the background through an optional `waitUntil` (Next.js `after`, `ctx.waitUntil`), and failures are logged once. vante.app wrote it on every successful request.
+- 2026-11-19: `legacyHash(key)` returns the old system's stored hash. Lookup uses `key_hash in (new, legacy)` in the same single query. A legacy match is upgraded to groundwork's hash in the background, so the old pepper can be retired once every key has been used. `docs/api-keys.md` has the copy-over SQL for vante.app.
+- 2026-11-19: Audit events cover create, update, rotate, revoke, suspend, reinstate and delete (vante.app audits all of them; the plan named four). They are written through `onEvent` in the mutation's `tx`, so a rolled-back revoke leaves neither the revocation nor its entry. Without a `tx` the two are separate statements, which the docs say. Entries name the key and its prefix, never the key; update entries carry a diff of the policy fields.
+- 2026-11-19: Lifecycle details: `rotate` returns `null` for revoked keys. Rotating during a grace period ends the older key (vante.app does the same). `delete` only deletes revoked keys. `reinstate` and `suspend` skip revoked keys. Invalid UUIDs return `null`/`false` instead of a SQL error. `expiresAt` must be in the future.
+- 2026-11-19: Mutation checks:
+  - removing the grace expiry (SQL and JS) fails the rotation test;
+  - disabling the IP check fails the CIDR test;
+  - a typo'd key in the "never hits the DB" test proves the checksum works.
+  
+  A first-run flake (two keys created at the same fake-clock instant tie-broke `list()` order by random UUID) was a test issue, fixed by advancing the clock. 5× reruns on both drivers: 125/125.
+- 2026-11-19: Failure results carry `prefix`, the presented key's display prefix, whenever it parsed (so for invalid keys too). vante.app logs it for failed attempts, and only having `key` (set when the record is found) would have lost that.
 
 ## 11. Alternatives check (2026-11-19)
 

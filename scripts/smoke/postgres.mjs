@@ -26,6 +26,10 @@ try {
     tables: groundworkTables(),
     secret: "smoke-test-secret-0123456789abcdefghij",
     audit: { actions: ["smoke.run"] },
+    apiKeys: {
+      namespace: "smk",
+      scopes: { "posts:read": "Read posts", "posts:write": "Write posts" },
+    },
   });
   const rule = gw.rateLimit.rule({ name: "smoke", limit: 2, window: "1m" });
   const results = await Promise.all([1, 2, 3, 4].map(() => rule.check("203.0.113.9")));
@@ -57,6 +61,21 @@ try {
   assert.equal(entries.length, 1);
   assert.deepEqual(entries[0].metadata, { nested: { password: "[redacted]" } });
   assert.equal(nextCursor, null);
+
+  // API keys: created once, stored as a hash, verified from a Request, rejected with a JSON 403.
+  const { key, record } = await gw.apiKeys.create({ name: "smoke", scopes: ["posts:read"] });
+  assert.match(key, /^smk_[0-9a-f]{12}_[A-Za-z0-9_-]{43}[0-9A-Za-z]{6}$/);
+  const request = new Request("https://api.test/", { headers: { authorization: `Bearer ${key}` } });
+  const ok = await gw.apiKeys.verify(request, { scopes: ["posts:read"] });
+  assert.equal(ok.ok, true);
+  const denied = await gw.apiKeys.verify(request, { scopes: ["posts:write"] });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.response.status, 403);
+  assert.deepEqual((await denied.response.json()).error.missingScopes, ["posts:write"]);
+  const [keyRow] = await client`select row_to_json(k)::text as row from gw_api_keys k`;
+  assert.ok(!keyRow.row.includes(key.slice(17, 40)), "the key itself is never stored");
+  const [entry] = (await gw.audit.query({ action: "api_key.create" })).entries;
+  assert.equal(entry.entity.id, record.id);
   await client.end();
 } finally {
   await admin.unsafe(`drop database if exists "${name}" with (force)`);

@@ -12,6 +12,7 @@ import {
   isGroundworkError,
   type Logger,
 } from "groundwork";
+import { createApiKeys, type VerifyResult } from "groundwork/api-keys";
 import { type AuditEntry, createAuditLog, diff } from "groundwork/audit";
 import { createRateLimiter, type RateLimitResult, redisStore } from "groundwork/rate-limit";
 import { groundworkTables } from "groundwork/schema";
@@ -98,4 +99,41 @@ typed.audit.record({ actor: { type: "system" }, action: "invoice.send" });
 // @ts-expect-error not a declared action
 typed.audit.record({ actor: { type: "system" }, action: "invoice.void" });
 
-void [window, noUnit, code, opsName, result, retry, recorded, page];
+// API keys: scopes and wildcards are typed from the config.
+const { apiKeys } = groundworkTables();
+const keys = createApiKeys({
+  db: jsDb,
+  table: apiKeys,
+  secret,
+  namespace: "vnt",
+  scopes: { "posts:read": "Read posts", "posts:write": "Write posts" },
+  defaultRateLimit: null,
+});
+keys.create({
+  name: "CI",
+  scopes: ["posts:read", "posts:*"],
+  allowedIps: ["10.0.0.0/8"],
+  expiresIn: "90d",
+});
+// @ts-expect-error not a declared scope
+keys.create({ name: "CI", scopes: ["users:read"] });
+const verified: Promise<VerifyResult<"posts:read" | "posts:write">> = keys.verify(
+  new Request("https://x.test"),
+  {
+    scopes: ["posts:write"],
+    ip: "203.0.113.7",
+  },
+);
+// @ts-expect-error verify needs declared scopes, not wildcards
+keys.verify("key", { scopes: ["posts:*"] });
+const gwKeys = createGroundwork({
+  db: jsDb,
+  tables: { apiKeys, rateLimits },
+  secret,
+  apiKeys: { namespace: "vnt", scopes: { "billing:read": "Read invoices" } },
+});
+gwKeys.apiKeys.verify("key", { scopes: ["billing:read"] });
+// @ts-expect-error not a declared scope
+gwKeys.apiKeys.verify("key", { scopes: ["posts:read"] });
+
+void [window, noUnit, code, opsName, result, retry, recorded, page, verified];

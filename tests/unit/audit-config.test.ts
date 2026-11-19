@@ -243,11 +243,19 @@ describe("types", () => {
       secret: TEST_SECRET,
       audit: { actions: ["order.refund"], entityTypes: ["order"] },
     });
-    const action: "order.refund" = gw.audit.actions[0] ?? "order.refund";
+    // The app's actions, plus groundwork's own api_key.* actions.
+    const action: "order.refund" | `api_key.${string}` = gw.audit.actions[0] ?? "order.refund";
     // @ts-expect-error not a declared action
     const badRecord = () => gw.audit.record({ actor: { type: "system" }, action: "order.ship" });
-    expect(typeof badRecord).toBe("function");
+    const keyEvent = () =>
+      gw.audit.record({
+        actor: { type: "system" },
+        action: "api_key.revoke",
+        entity: { type: "api_key" },
+      });
+    expect([typeof badRecord, typeof keyEvent]).toEqual(["function", "function"]);
     expect(action).toBe("order.refund");
+    expect(gw.audit.actions).toContain("api_key.rotate");
     expect(gw.audit).toBe(gw.audit);
 
     const noConfig = createGroundwork({ db, tables: { auditLog }, secret: TEST_SECRET });

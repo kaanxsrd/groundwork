@@ -6,7 +6,7 @@ groundwork's tables live in your Drizzle schema. You export them, and your drizz
 // src/db/schema/groundwork.ts
 import { groundworkTables } from "groundwork/schema";
 
-export const { rateLimits, auditLog } = groundworkTables();
+export const { rateLimits, auditLog, apiKeys } = groundworkTables();
 ```
 
 Make sure drizzle-kit reads this file (it's covered by the `schema` glob in `drizzle.config.ts`), then:
@@ -69,6 +69,27 @@ Append-only: groundwork inserts, and deletes only in `prune()`. See [audit log](
 | `ip`, `request_id` | `text` | As given. |
 
 Indexes: `(occurred_at, id)`, plus `action`, `(entity_type, entity_id)` and `(actor_type, actor_id)`, each followed by `(occurred_at, id)`, so every filter can page without sorting.
+
+### `gw_api_keys`
+
+One row per key. The key itself is never stored. See [API keys](api-keys.md).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | `uuid` primary key | `gen_random_uuid()`. |
+| `name`, `description` | `text` | For people. |
+| `prefix` | `text`, unique | 12 hex characters, shown as `vnt_<prefix>`. |
+| `key_hash` | `text`, unique | HMAC-SHA256 of the key under the API-key subkey. |
+| `previous_key_hash`, `previous_key_expires_at` | `text`, `timestamptz` | The key before the last rotation, valid until its grace period ends. Partial index. |
+| `scopes` | `text[]` | Granted scopes, including `resource:*` wildcards. |
+| `owner_id` | `text` | Whose key it is. Indexed with `created_at`. |
+| `rate_limit`, `rate_limit_window` | `integer`, `text` | Per-key limit, such as `60` per `1m`. Null for none. |
+| `daily_quota` | `integer` | Requests per day. Null for none. |
+| `allowed_ips`, `allowed_origins` | `text[]` | Canonical CIDR blocks and origins. Empty means any. |
+| `metadata` | `jsonb` | Your own data. |
+| `expires_at`, `revoked_at`, `revoked_reason`, `suspended_until`, `suspended_reason`, `rotated_at` | | Lifecycle. |
+| `last_used_at`, `last_used_ip` | | Updated at most once a minute. |
+| `created_by`, `created_at`, `updated_at` | | Bookkeeping. |
 
 ## Using the tables directly
 

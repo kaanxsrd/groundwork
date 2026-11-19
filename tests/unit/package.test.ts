@@ -53,7 +53,7 @@ describe("package.json", () => {
       "./schema": ["DEFAULT_PREFIX", "groundworkTables"],
       "./rate-limit": ["createRateLimiter", "memoryStore", "redisStore"],
       "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
-      "./api-keys": [],
+      "./api-keys": ["API_KEY_AUDIT_ACTIONS", "apiKeyAuditEvent", "createApiKeys"],
       "./jobs": [],
       "./idempotency": [],
       "./next": [],

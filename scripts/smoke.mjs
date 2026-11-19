@@ -90,7 +90,7 @@ step(`install into a fresh project (TypeScript ${tsVersions.join(", ")})`, () =>
 
 step(`import every subpath on Node ${process.versions.node}`, () => run("node runtime.mjs", app));
 
-step(`rate limiting and audit against Postgres on Node ${process.versions.node}`, () =>
+step(`rate limiting, audit and API keys against Postgres on Node ${process.versions.node}`, () =>
   run("node postgres.mjs", app, {
     SMOKE_DATABASE_URL: maintenanceUrl,
     SMOKE_MIGRATIONS: join(root, "tests", "migrations"),

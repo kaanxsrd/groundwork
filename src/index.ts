@@ -11,13 +11,22 @@
  *   tables,
  *   secret: env.GROUNDWORK_SECRET,
  *   audit: { actions: ["post.create", "post.update"] },
+ *   apiKeys: { namespace: "vnt", scopes: { "posts:read": "Read posts" } },
  * });
  * const loginLimit = gw.rateLimit.rule({ name: "login:ip", limit: 5, window: "15m" });
  * await gw.audit.record({ actor: { type: "system" }, action: "post.create" });
+ * const auth = await gw.apiKeys.verify(request, { scopes: ["posts:read"] });
  * ```
  *
  * @module
  */
+import { createApiKeys } from "./api-keys/api-keys.ts";
+import {
+  API_KEY_AUDIT_ACTIONS,
+  type ApiKeyAuditAction,
+  apiKeyAuditEvent,
+} from "./api-keys/audit.ts";
+import type { ApiKeyEvent, ApiKeyRateLimit, ApiKeys } from "./api-keys/types.ts";
 import { createAuditLog } from "./audit/audit-log.ts";
 import type { RedactRule } from "./audit/json.ts";
 import type { AuditLog } from "./audit/types.ts";
@@ -29,6 +38,7 @@ import { GroundworkError } from "./internal/errors.ts";
 import type { Logger } from "./internal/logger.ts";
 import { createRateLimiter } from "./rate-limit/limiter.ts";
 import type { OnError, RateLimiter, RateLimitStore } from "./rate-limit/types.ts";
+import type { ApiKeysTable } from "./schema/api-keys.ts";
 import type { AuditLogTable } from "./schema/audit-log.ts";
 import type { RateLimitsTable } from "./schema/rate-limits.ts";
 
@@ -42,6 +52,7 @@ export type { LogContext, Logger } from "./internal/logger.ts";
 export interface GroundworkOptions<
   TAuditAction extends string = never,
   TAuditEntity extends string = string,
+  TScopes extends Record<string, string> = Record<never, string>,
 > {
   /** Your Drizzle Postgres database, from any driver. */
   readonly db: GroundworkDatabase;
@@ -52,6 +63,7 @@ export interface GroundworkOptions<
   readonly tables: {
     readonly rateLimits?: RateLimitsTable | undefined;
     readonly auditLog?: AuditLogTable | undefined;
+    readonly apiKeys?: ApiKeysTable | undefined;
   };
   /** At least 32 bytes. Changing it invalidates every API key and resets every rate limit. */
   readonly secret: Secret;
@@ -72,9 +84,9 @@ export interface GroundworkOptions<
     | undefined;
   readonly audit?:
     | {
-        /** Every action your app records. `gw.audit` is typed from this list. */
+        /** Every action your app records. `gw.audit` is typed from this list, plus `api_key.*`. */
         readonly actions: readonly TAuditAction[];
-        /** Entity types. When given, `entity.type` is typed and checked too. */
+        /** Entity types. When given, `entity.type` is typed and checked too (plus `"api_key"`). */
         readonly entityTypes?: readonly TAuditEntity[] | undefined;
         /** Keys to redact in `changes` and `metadata`, on top of `DEFAULT_REDACT`. */
         readonly redact?: readonly RedactRule[] | undefined;
@@ -82,21 +94,48 @@ export interface GroundworkOptions<
         readonly redactDefaults?: boolean | undefined;
       }
     | undefined;
+  readonly apiKeys?:
+    | {
+        /** The start of every key, such as `"vnt"` for `vnt_…`. */
+        readonly namespace: string;
+        /** Every scope your API knows, with a description. `gw.apiKeys` is typed from it. */
+        readonly scopes: TScopes;
+        /** Append a CRC32 checksum to new keys. Defaults to `true`. */
+        readonly checksum?: boolean | undefined;
+        /** The limit new keys get by default: 60 per minute. `null` for none. Uses `gw.rateLimit`. */
+        readonly defaultRateLimit?: ApiKeyRateLimit | null | undefined;
+        /** The hash an older system stored for a key, so its keys keep working. See the API-key docs. */
+        readonly legacyHash?: ((key: string) => string) | undefined;
+        /** Called after every change to a key, after the audit entry is written. */
+        readonly onEvent?:
+          | ((event: ApiKeyEvent<keyof TScopes & string>) => void | Promise<void>)
+          | undefined;
+        /** Receives background writes, such as Next.js `after` or `ctx.waitUntil`. */
+        readonly waitUntil?: ((promise: Promise<unknown>) => void) | undefined;
+      }
+    | undefined;
 }
 
 export interface Groundwork<
   TAuditAction extends string = never,
   TAuditEntity extends string = string,
+  TScope extends string = never,
 > {
   readonly rateLimit: RateLimiter;
-  readonly audit: AuditLog<TAuditAction, TAuditEntity>;
+  /** Also accepts groundwork's own `api_key.*` actions, which API-key changes record. */
+  readonly audit: AuditLog<TAuditAction | ApiKeyAuditAction, TAuditEntity | "api_key">;
+  readonly apiKeys: ApiKeys<TScope>;
 }
 
 /** Wires every module to one database, one secret, one logger and one clock. */
 export function createGroundwork<
   const TAuditAction extends string = never,
   const TAuditEntity extends string = string,
->(options: GroundworkOptions<TAuditAction, TAuditEntity>): Groundwork<TAuditAction, TAuditEntity> {
+  const TScopes extends Record<string, string> = Record<never, string>,
+>(
+  options: GroundworkOptions<TAuditAction, TAuditEntity, TScopes>,
+): Groundwork<TAuditAction, TAuditEntity, keyof TScopes & string> {
+  type TScope = keyof TScopes & string;
   if (typeof options !== "object" || options === null) {
     throw new GroundworkError("invalid_config", "createGroundwork needs an options object.");
   }
@@ -125,45 +164,100 @@ export function createGroundwork<
     );
 
   let rateLimit: RateLimiter | undefined;
-  let audit: AuditLog<TAuditAction, TAuditEntity> | undefined;
+  function getRateLimit(): RateLimiter {
+    if (rateLimit) return rateLimit;
+    const config = options.rateLimit ?? {};
+    const common = {
+      ...shared,
+      ...(config.onError === undefined ? {} : { onError: config.onError }),
+      ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
+      ...(config.memory === undefined ? {} : { memory: config.memory }),
+    };
+    if (config.store !== undefined) {
+      rateLimit = createRateLimiter({ ...common, store: config.store });
+    } else {
+      if (tables.rateLimits === undefined) throw missingTable("rateLimit", "rateLimits");
+      rateLimit = createRateLimiter({ ...common, db, table: tables.rateLimits });
+    }
+    return rateLimit;
+  }
+
+  type Audit = AuditLog<TAuditAction | ApiKeyAuditAction, TAuditEntity | "api_key">;
+  let audit: Audit | undefined;
+  function getAudit(): Audit {
+    if (audit) return audit;
+    const config = options.audit;
+    if (config === undefined) {
+      throw new GroundworkError(
+        "invalid_config",
+        'gw.audit needs its actions: createGroundwork({ audit: { actions: ["post.create", …] } }).',
+      );
+    }
+    if (tables.auditLog === undefined) throw missingTable("audit", "auditLog");
+    audit = createAuditLog<TAuditAction | ApiKeyAuditAction, TAuditEntity | "api_key">({
+      db,
+      table: tables.auditLog,
+      actions: [...new Set([...config.actions, ...API_KEY_AUDIT_ACTIONS])],
+      entityTypes:
+        config.entityTypes === undefined
+          ? undefined
+          : [...new Set([...config.entityTypes, "api_key" as const])],
+      redact: config.redact,
+      redactDefaults: config.redactDefaults,
+      clock,
+    });
+    return audit;
+  }
+
+  let apiKeys: ApiKeys<TScope> | undefined;
+  function getApiKeys(): ApiKeys<TScope> {
+    if (apiKeys) return apiKeys;
+    const config = options.apiKeys;
+    if (config === undefined) {
+      throw new GroundworkError(
+        "invalid_config",
+        'gw.apiKeys needs its namespace and scopes: createGroundwork({ apiKeys: { namespace: "vnt", scopes: { … } } }).',
+      );
+    }
+    if (tables.apiKeys === undefined) throw missingTable("apiKeys", "apiKeys");
+    const canRateLimit = options.rateLimit?.store !== undefined || tables.rateLimits !== undefined;
+    if (!canRateLimit && config.defaultRateLimit !== null) {
+      throw new GroundworkError(
+        "invalid_config",
+        "API keys get a 60-per-minute limit by default, which needs gw.rateLimit: export the rateLimits table too, or set apiKeys.defaultRateLimit: null.",
+      );
+    }
+    // With the audit log configured, every change to a key is recorded in the same transaction.
+    const auditLog =
+      options.audit !== undefined && tables.auditLog !== undefined ? getAudit() : undefined;
+    apiKeys = createApiKeys<TScopes>({
+      ...shared,
+      db,
+      table: tables.apiKeys,
+      namespace: config.namespace,
+      scopes: config.scopes,
+      checksum: config.checksum,
+      rateLimiter: canRateLimit ? getRateLimit() : undefined,
+      defaultRateLimit: config.defaultRateLimit,
+      legacyHash: config.legacyHash,
+      waitUntil: config.waitUntil,
+      onEvent: async (event) => {
+        if (auditLog) await auditLog.record(apiKeyAuditEvent(event), { tx: event.tx });
+        if (config.onEvent) await config.onEvent(event);
+      },
+    });
+    return apiKeys;
+  }
+
   return {
-    get rateLimit(): RateLimiter {
-      if (rateLimit) return rateLimit;
-      const config = options.rateLimit ?? {};
-      const common = {
-        ...shared,
-        ...(config.onError === undefined ? {} : { onError: config.onError }),
-        ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
-        ...(config.memory === undefined ? {} : { memory: config.memory }),
-      };
-      if (config.store !== undefined) {
-        rateLimit = createRateLimiter({ ...common, store: config.store });
-      } else {
-        if (tables.rateLimits === undefined) throw missingTable("rateLimit", "rateLimits");
-        rateLimit = createRateLimiter({ ...common, db, table: tables.rateLimits });
-      }
-      return rateLimit;
+    get rateLimit() {
+      return getRateLimit();
     },
-    get audit(): AuditLog<TAuditAction, TAuditEntity> {
-      if (audit) return audit;
-      const config = options.audit;
-      if (config === undefined) {
-        throw new GroundworkError(
-          "invalid_config",
-          'gw.audit needs its actions: createGroundwork({ audit: { actions: ["post.create", …] } }).',
-        );
-      }
-      if (tables.auditLog === undefined) throw missingTable("audit", "auditLog");
-      audit = createAuditLog<TAuditAction, TAuditEntity>({
-        db,
-        table: tables.auditLog,
-        actions: config.actions,
-        entityTypes: config.entityTypes,
-        redact: config.redact,
-        redactDefaults: config.redactDefaults,
-        clock,
-      });
-      return audit;
+    get audit() {
+      return getAudit();
+    },
+    get apiKeys() {
+      return getApiKeys();
     },
   };
 }
