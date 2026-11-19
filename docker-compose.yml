@@ -1,0 +1,32 @@
+# Postgres for the integration tests. CI uses this same file.
+#   bun run db:up                          # Postgres 18 on 127.0.0.1:54330
+#   POSTGRES_VERSION=16 bun run db:up      # the oldest supported major (run db:down first)
+# Data lives in tmpfs and durability is switched off: this database is disposable.
+name: groundwork
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18}-alpine
+    environment:
+      POSTGRES_USER: groundwork
+      POSTGRES_PASSWORD: groundwork # local development only
+      POSTGRES_DB: groundwork
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - max_connections=300
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-54330}:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U groundwork -d groundwork"]
+      interval: 1s
+      timeout: 3s
+      retries: 30

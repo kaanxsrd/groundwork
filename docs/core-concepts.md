@@ -1,0 +1,97 @@
+# Core concepts
+
+Things every groundwork module shares. Types are exported from the root entry point:
+
+```ts
+import { type Duration, GroundworkError, isGroundworkError, type Logger, type Clock, type Secret } from "groundwork";
+```
+
+## Durations
+
+Anywhere groundwork asks for a length of time (a rate-limit window, a key's expiry, a job timeout), it takes a `Duration`: a number followed by a unit.
+
+| Unit | Meaning | Example |
+| --- | --- | --- |
+| `ms` | milliseconds | `"500ms"` |
+| `s` | seconds | `"30s"` |
+| `m` | minutes | `"15m"` |
+| `h` | hours | `"24h"` |
+| `d` | days | `"90d"` |
+| `w` | weeks | `"2w"` |
+
+Decimals work (`"1.5h"`). TypeScript rejects a missing unit, and groundwork throws a `GroundworkError` with code `invalid_argument` for anything malformed at runtime.
+
+Two things are deliberately missing:
+
+- **Bare numbers.** `window: 60` could mean seconds or milliseconds, so it isn't accepted. Build a duration from a variable with a template literal: `` `${days}d` ``.
+- **Months and years.** They have no fixed length. Use `"30d"` or `"365d"`.
+
+## The app secret
+
+Modules that hash things (rate-limit subjects, API keys, idempotency fingerprints) need one app secret of at least 32 bytes:
+
+```sh
+openssl rand -base64 32
+```
+
+groundwork never uses it directly. It derives a separate 256-bit key for each purpose with HKDF-SHA256, so a key derived for rate limiting can never be used to forge an API key hash. The secret can be a string (its UTF-8 bytes count) or a `Uint8Array`.
+
+> [!IMPORTANT]
+> Stored API key hashes are derived from this secret. **Changing the secret invalidates every API key** and resets every rate limit. Keep it stable, keep it out of source control, and back it up with your database credentials. Support for rotating to a new secret (`previousSecrets`) is planned.
+
+## Errors
+
+groundwork throws one error class on purpose: `GroundworkError`. Branch on its `code`, not on the message:
+
+```ts
+try {
+  // …
+} catch (error) {
+  if (isGroundworkError(error) && error.code === "invalid_config") {
+    // a startup misconfiguration
+  }
+  throw error;
+}
+```
+
+| Code | Meaning |
+| --- | --- |
+| `invalid_config` | Options passed when creating a module are wrong. Thrown at startup, never per request. |
+| `invalid_argument` | A value passed to a method is wrong, such as a malformed duration. |
+
+Modules add codes as they land. `isGroundworkError()` works even if two copies of groundwork end up in your dependency tree, where `instanceof` would not. Error messages never contain secrets, API keys or rate-limit subjects.
+
+Expected outcomes are not errors: a denied rate-limit check or a rejected API key comes back as a result value, not a throw.
+
+## Logging
+
+groundwork logs rarely: a degraded mode (such as falling back to the in-memory rate limiter while Postgres is down) is logged once, not on every request. Pass any object with `warn` and `error` methods; `debug` and `info` are optional.
+
+```ts
+import type { Logger } from "groundwork";
+
+const logger: Logger = console; // works as is
+```
+
+pino takes the context first, so swap the arguments:
+
+```ts
+const logger: Logger = {
+  warn: (message, context) => pino.warn(context, message),
+  error: (message, context) => pino.error(context, message),
+};
+```
+
+By default warnings and errors go to the console with a `[groundwork]` prefix. Log context never contains secrets, raw keys or raw subjects.
+
+## Clocks
+
+Modules that depend on time take a `Clock`, an object with `now(): Date`. The default reads the system time. In tests, inject one you control:
+
+```ts
+import type { Clock } from "groundwork";
+
+let now = new Date("2026-01-01T00:00:00Z");
+const clock: Clock = { now: () => now };
+now = new Date(now.getTime() + 15 * 60_000); // jump 15 minutes
+```

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.4.2"
+
+jobs:
+  check:
+    name: Biome, typecheck, unit tests, migration drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - run: bun install --frozen-lockfile
+      - run: bunx biome ci .
+      - run: bun run typecheck
+      - run: bun run test:unit
+      - name: Migrations are up to date with the fixture schema
+        run: bun run db:drift
+
+  integration:
+    # Oldest and newest supported Postgres majors, each with both drivers.
+    name: Integration (Postgres ${{ matrix.postgres }}, ${{ matrix.driver }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "18"]
+        driver: [postgres-js, node-postgres]
+    env:
+      # The same docker-compose.yml as local development, so CI and laptops run the same server.
+      POSTGRES_VERSION: ${{ matrix.postgres }}
+      GW_TEST_DRIVER: ${{ matrix.driver }}
+      TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - run: bun install --frozen-lockfile
+      - run: bun run db:up
+      - run: bun run test:integration
+      - name: Again with parallel workers (the harness must be safe across processes)
+        run: bun test tests/integration --parallel=4
+      - name: Postgres logs
+        if: failure()
+        run: docker compose logs postgres
+
+  smoke:
+    name: Built package on Node 22
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - uses: actions/setup-node@v7
+        with: { node-version: 22 }
+      - run: bun install --frozen-lockfile
+      # Build, publint, are-the-types-wrong, then install the packed tarball into a fresh project:
+      # import every subpath on Node 22 and type-check a consumer with TypeScript 5.9, 6.0 and 7.0.
+      - run: bun run smoke
