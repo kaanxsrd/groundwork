@@ -232,6 +232,11 @@ The sketch is a direction, not a contract. Improve it if a better shape appears,
 - `query({ action, actorId, entity, from, to, cursor, limit })` uses keyset pagination on `(occurred_at, id)`.
 - `prune({ olderThan: "365d" })`.
 - Docs include a SQL snippet that revokes `UPDATE`/`DELETE` on the table from the app role, for people who want it tamper-resistant.
+- **Decided in Phase 2** (details in the Decisions log):
+  - `record()` throws instead of swallowing errors;
+  - `entityTypes` is optional and typed like `actions`;
+  - redaction matches keys that contain a rule, on top of `DEFAULT_REDACT`;
+  - `count()`, `search`, `where` and `order: "asc"` were added to cover the apps' read paths.
 - **Must-pass tests:**
   - a record inside a rolled-back transaction disappears;
   - redaction works on nested objects;
@@ -328,8 +333,8 @@ Don't start the next phase until I approve.
 - **Done when:** the Faultline in-memory limiter could be swapped out with no loss of features.
 
 ### Phase 2: Audit log
-- [ ] `record`, `recordMany`, `diff`, redaction, `query`, `prune`, typed actions
-- [ ] All 6.2 must-pass tests
+- [x] `record`, `recordMany`, `diff`, redaction, `query`, `prune`, typed actions
+- [x] All 6.2 must-pass tests
 - **Done when:** vante.app's and bubblehouse-dk's audit needs are covered.
 
 ### Phase 3: Scoped API keys
@@ -436,6 +441,25 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - Redis 8 is in docker compose and CI.
   
   The fixture schema now calls `groundworkTables()` twice, once with the default and once with prefix `alt_` in schema `groundwork_alt`. Its migration replaces Phase 0's probe table.
+- 2026-11-19 (Phase 2): The owner replied "continue" to the Phase 1 report, which I took as approval of Phase 1. The open questions (daily quotas, legacy key hashes, Drizzle 1.0, `PROMPT.md`, a GitHub repo) don't affect Phase 2 and are still open.
+- 2026-11-19: `gw_audit_log` columns: `id`, `occurred_at`, `actor_type`, `actor_id`, `actor_label`, `action`, `entity_type`, `entity_id`, `summary`, `changes`, `metadata`, `ip`, `request_id`.
+  - `id` is a `bigint GENERATED ALWAYS AS IDENTITY` (Drizzle mode `number`), so nothing can supply ids.
+  - Both reference tables are covered: vante.app's `actor`/`summary`/`metadata`/`ip`, and bubblehouse-dk's `actor_id`/`actor_role`/`description`/`changes`. Its role becomes `actor_label`, and a null actor becomes `actor_type: "system"`. `docs/audit.md` has a migration SQL snippet for each.
+  - Indexes: `(occurred_at, id)`, plus action, entity and actor, each followed by `(occurred_at, id)`, so filtered pages never sort.
+- 2026-11-19: `occurred_at` defaults to `now()`, the transaction's start time, not `clock_timestamp()`. An entry recorded with a change then carries the same timestamp as that change, matching Drizzle's `defaultNow()` on app tables. Explicit `occurredAt` (for imports) and an injected clock override it.
+- 2026-11-19: `record()` throws on invalid events (`invalid_argument`, before anything is sent) and on database errors. Both reference apps swallow and log audit errors, but inside a transaction a swallowed error has already aborted the transaction, so the business commit fails later with a confusing message. The docs show the one-line catch for best-effort logging.
+- 2026-11-19: Actions are required and inferred through `const` type parameters, so there's no `as const`, and they're also checked at runtime. `entityTypes` is optional and typed the same way, because bubblehouse-dk types its entity types; it's an addition to the plan's sketch. `createGroundwork({ audit: { actions } })` carries both types through to `gw.audit`.
+- 2026-11-19: Redaction rules:
+  - A string matches any key that *contains* it, ignoring case, `_` and `-`, so the sketch's `redact: ["token"]` also covers `accessToken`/`refresh_token`. A RegExp is tested against the raw key.
+  - `DEFAULT_REDACT` (password, passwd, secret, token, apiKey, authorization, cookie, privateKey) always applies unless `redactDefaults: false`. Secure by default, with over-matching (`tokenCount`) as the safer failure.
+  - Redaction and JSON normalisation happen in one walk: Dates become ISO strings, bigints strings, `undefined` and functions are dropped, Maps and Sets become objects and arrays, cycles become `"[circular]"`, and depth is capped at 32. The input is never mutated.
+  - `summary`, `actor.label` and `ip` are not redacted, which the docs say.
+- 2026-11-19: `query()` uses keyset pagination on `(occurred_at, id)` with an opaque cursor. The cursor carries `occurred_at` as microsecond ISO text, because a JS Date's milliseconds would skip or repeat entries that share a millisecond, and it records the order. JSON and timestamps are selected as text, so both drivers return the same thing.
+- 2026-11-19: Bug found by the must-pass pagination test: `ORDER BY id` resolved to the `id::text` output alias (Postgres prefers output names in ORDER BY), so ties sorted as text while the cursor compared numbers, and concurrent pages returned duplicates. ORDER BY now uses the qualified table columns. Mutation check: dropping the id tie-breaker from the cursor makes the same test report 281 missing entries.
+- 2026-11-19: The pagination guarantee as documented: no entry appears twice, and every entry committed before the walk started appears exactly once. Entries committed during the walk may or may not appear: a long transaction that commits after the walk passed its timestamp isn't seen. That's inherent to any timestamp-ordered log, short of commit-timestamp tracking.
+- 2026-11-19: `count()` and the `search`/`where` filters go beyond the plan. They cover what the apps use today: bubblehouse-dk's totals and free-text search, and its order timeline, which needs `changes->>'orderNumber'`. Both apps paginate with page numbers and offsets; groundwork offers cursors plus `count()`, which means newer/older navigation instead of page jumping. Offsets could be added later if dogfooding needs them.
+- 2026-11-19: `recordMany` is capped at 1,000 events per call, because 12 parameters per row stay far below Postgres's limit of 65,535, and it's one statement so it's all-or-none without a transaction. `prune` deletes in batches of 5,000 ordered by `(occurred_at, id)`.
+- 2026-11-19: The table-shape check is shared (`internal/table.ts`) by the rate-limit and audit modules. The smoke test now records, redacts and queries an audit entry through the packed package on Node, and type-checks typed actions on TS 5.9, 6.0 and 7.0. The fixtures gained `auditLog` and `altAuditLog` through an incremental migration (`0001_audit_log`), the way an app would adopt a new module.
 
 ## 11. Alternatives check (2026-11-19)
 

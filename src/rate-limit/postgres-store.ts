@@ -1,6 +1,7 @@
-import { getTableColumns, getTableName, type SQL, sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { GroundworkError } from "../internal/errors.ts";
+import { assertTableColumns } from "../internal/table.ts";
 import { RATE_LIMIT_COLUMNS, type RateLimitsTable } from "../schema/rate-limits.ts";
 import { EPSILON } from "./policy.ts";
 import type { ConsumeInput, RateLimitStore, ResetOptions, StoreState } from "./types.ts";
@@ -27,25 +28,6 @@ const ms = (column: SQL): SQL => sql`(extract(epoch from ${column}) * 1000)::flo
 /** The decision's time: the injected clock if there is one, else the database's. */
 const nowParam = (now: number | null): SQL =>
   sql`coalesce(${now === null ? null : new Date(now).toISOString()}::timestamptz, clock_timestamp())`;
-
-function assertRateLimitsTable(table: RateLimitsTable): void {
-  let names: string[];
-  try {
-    names = Object.values(getTableColumns(table)).map((column) => column.name);
-  } catch {
-    throw new GroundworkError(
-      "invalid_config",
-      "table must be the rateLimits table from groundworkTables().",
-    );
-  }
-  const missing = RATE_LIMIT_COLUMNS.filter((column) => !names.includes(column));
-  if (missing.length > 0) {
-    throw new GroundworkError(
-      "invalid_config",
-      `Table "${getTableName(table)}" is not a groundwork rate-limit table (missing ${missing.join(", ")}). Pass the rateLimits table from groundworkTables().`,
-    );
-  }
-}
 
 /**
  * One statement per check:
@@ -118,7 +100,7 @@ export function postgresStore(
   if (!db || typeof db.execute !== "function") {
     throw new GroundworkError("invalid_config", "db must be a Drizzle Postgres database.");
   }
-  assertRateLimitsTable(table);
+  assertTableColumns(table, RATE_LIMIT_COLUMNS, "rateLimits table from groundworkTables()");
 
   return {
     kind: "postgres",

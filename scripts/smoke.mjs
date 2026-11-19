@@ -7,7 +7,7 @@
 // 2. Under plain Node (CI uses Node 22, the oldest supported):
 //    - scripts/smoke/runtime.mjs imports every subpath and checks internals stay private;
 //    - scripts/smoke/postgres.mjs migrates a fresh database from tests/migrations and runs real
-//      rate-limit checks through the published API.
+//      rate-limit checks and audit entries through the published API.
 // 3. Type-checks scripts/smoke/types.ts with several TypeScript versions and module resolutions.
 //    Its expected-error lines prove the types are real and not silently `any`.
 //
@@ -90,7 +90,7 @@ step(`install into a fresh project (TypeScript ${tsVersions.join(", ")})`, () =>
 
 step(`import every subpath on Node ${process.versions.node}`, () => run("node runtime.mjs", app));
 
-step(`rate-limit against Postgres on Node ${process.versions.node}`, () =>
+step(`rate limiting and audit against Postgres on Node ${process.versions.node}`, () =>
   run("node postgres.mjs", app, {
     SMOKE_DATABASE_URL: maintenanceUrl,
     SMOKE_MIGRATIONS: join(root, "tests", "migrations"),

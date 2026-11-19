@@ -1,5 +1,7 @@
 // Type-checked in the smoke project with several TypeScript versions, never run. Each expected
 // error below becomes a build failure if the types it guards collapse to `any`.
+
+import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
@@ -10,6 +12,7 @@ import {
   isGroundworkError,
   type Logger,
 } from "groundwork";
+import { type AuditEntry, createAuditLog, diff } from "groundwork/audit";
 import { createRateLimiter, type RateLimitResult, redisStore } from "groundwork/rate-limit";
 import { groundworkTables } from "groundwork/schema";
 import { createTestClock } from "groundwork/testing";
@@ -62,4 +65,37 @@ const gw = createGroundwork({ db: pgDb, tables: { rateLimits }, secret, logger }
 const retry: number = (await gw.rateLimit.rule({ name: "y", limit: 1, window: "1m" }).check("x"))
   .retryAfterMs;
 
-void [window, noUnit, code, opsName, result, retry];
+// Audit actions and entity types are inferred from the config, without as const.
+const { auditLog } = groundworkTables();
+const audit = createAuditLog({
+  db: pgDb,
+  table: auditLog,
+  actions: ["post.create", "post.update"],
+  entityTypes: ["post"],
+});
+const changes = diff({ title: "a", views: 1 }, { title: "b", views: 1 });
+const recorded: Promise<AuditEntry<"post.create" | "post.update", "post">> = audit.record(
+  {
+    actor: { type: "user", id: 1 },
+    action: "post.update",
+    entity: { type: "post", id: 1 },
+    changes,
+  },
+  { tx: jsDb },
+);
+// @ts-expect-error not a declared action
+audit.record({ actor: { type: "user" }, action: "post.delete" });
+// @ts-expect-error not a declared entity type
+audit.record({ actor: { type: "user" }, action: "post.create", entity: { type: "user" } });
+const page = audit.query({ action: ["post.create"], where: sql`true`, order: "asc", limit: 10 });
+const typed = createGroundwork({
+  db: jsDb,
+  tables: { auditLog },
+  secret,
+  audit: { actions: ["invoice.send"] },
+});
+typed.audit.record({ actor: { type: "system" }, action: "invoice.send" });
+// @ts-expect-error not a declared action
+typed.audit.record({ actor: { type: "system" }, action: "invoice.void" });
+
+void [window, noUnit, code, opsName, result, retry, recorded, page];

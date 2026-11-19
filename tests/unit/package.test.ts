@@ -52,7 +52,7 @@ describe("package.json", () => {
       ".": ["GroundworkError", "createGroundwork", "isGroundworkError"],
       "./schema": ["DEFAULT_PREFIX", "groundworkTables"],
       "./rate-limit": ["createRateLimiter", "memoryStore", "redisStore"],
-      "./audit": [],
+      "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
       "./api-keys": [],
       "./jobs": [],
       "./idempotency": [],

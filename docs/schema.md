@@ -6,7 +6,7 @@ groundwork's tables live in your Drizzle schema. You export them, and your drizz
 // src/db/schema/groundwork.ts
 import { groundworkTables } from "groundwork/schema";
 
-export const { rateLimits } = groundworkTables();
+export const { rateLimits, auditLog } = groundworkTables();
 ```
 
 Make sure drizzle-kit reads this file (it's covered by the `schema` glob in `drizzle.config.ts`), then:
@@ -52,6 +52,23 @@ One row per rule and subject seen recently. See [rate limiting](rate-limiting.md
 | `used` | `double precision` | Fixed window: cost spent in the current window. Token bucket: tokens taken and not yet refilled as of `updated_at`. |
 | `updated_at` | `timestamptz` | When the row last changed. |
 | `expires_at` | `timestamptz` | From this moment the row means the same as no row. Indexed; `cleanup()` deletes by it. |
+
+### `gw_audit_log`
+
+Append-only: groundwork inserts, and deletes only in `prune()`. See [audit log](audit.md).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | `bigint` identity primary key | Assigned by Postgres (`GENERATED ALWAYS`), so it can't be supplied. |
+| `occurred_at` | `timestamptz`, default `now()` | When it happened: the transaction's time unless set. With `id`, it orders the log. |
+| `actor_type`, `actor_id`, `actor_label` | `text` | Who did it. |
+| `action` | `text` | What they did, from your declared actions. |
+| `entity_type`, `entity_id` | `text` | What it was done to. |
+| `summary` | `text` | A sentence for people. |
+| `changes`, `metadata` | `jsonb` | Redacted before insert. |
+| `ip`, `request_id` | `text` | As given. |
+
+Indexes: `(occurred_at, id)`, plus `action`, `(entity_type, entity_id)` and `(actor_type, actor_id)`, each followed by `(occurred_at, id)`, so every filter can page without sorting.
 
 ## Using the tables directly
 

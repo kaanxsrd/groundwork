@@ -183,7 +183,7 @@ describe("postgres store: storage", () => {
         table: other,
         secret: TEST_SECRET,
       }),
-    ).toThrow(/not a groundwork rate-limit table/);
+    ).toThrow(/is not the rateLimits table from groundworkTables()/);
   });
 });
 

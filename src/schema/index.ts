@@ -5,7 +5,7 @@
  * // db/schema/groundwork.ts
  * import { groundworkTables } from "groundwork/schema";
  *
- * export const { rateLimits } = groundworkTables();
+ * export const { rateLimits, auditLog } = groundworkTables();
  * ```
  *
  * Export the tables you use from a file drizzle-kit reads, and `drizzle-kit generate` creates the
@@ -15,10 +15,11 @@
  * @module
  */
 import type { PgSchema } from "drizzle-orm/pg-core";
+import { type AuditLogTable, buildAuditLogTable } from "./audit-log.ts";
 import { createTableFactory, DEFAULT_PREFIX } from "./factory.ts";
 import { buildRateLimitsTable, type RateLimitsTable } from "./rate-limits.ts";
 
-export type { RateLimitsTable };
+export type { AuditLogTable, RateLimitsTable };
 export { DEFAULT_PREFIX };
 
 export interface GroundworkTablesOptions<TSchema extends string | undefined = undefined> {
@@ -38,6 +39,7 @@ export interface GroundworkTablesOptions<TSchema extends string | undefined = un
 /** Every groundwork table. Each module's table is added here as the module lands. */
 export type GroundworkTables<TSchema extends string | undefined = undefined> = {
   readonly rateLimits: RateLimitsTable<TSchema>;
+  readonly auditLog: AuditLogTable<TSchema>;
 } & (TSchema extends string
   ? {
       /** The Postgres schema. Export it too, or drizzle-kit won't generate `CREATE SCHEMA`. */
@@ -57,7 +59,10 @@ export function groundworkTables<const TSchema extends string | undefined = unde
   options: GroundworkTablesOptions<TSchema> = {},
 ): GroundworkTables<TSchema> {
   const factory = createTableFactory<TSchema>(options);
-  const tables = { rateLimits: buildRateLimitsTable(factory) };
+  const tables = {
+    rateLimits: buildRateLimitsTable(factory),
+    auditLog: buildAuditLogTable(factory),
+  };
   return (
     factory.pgSchema === undefined ? tables : { ...tables, schema: factory.pgSchema }
   ) as GroundworkTables<TSchema>;

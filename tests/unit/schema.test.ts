@@ -18,14 +18,46 @@ describe("groundworkTables", () => {
 
   test("applies the prefix to tables and indexes alike", () => {
     expect(getTableName(groundworkTables({ prefix: "" }).rateLimits)).toBe("rate_limits");
-    const { rateLimits } = groundworkTables({ prefix: "app_gw_" });
+    const { rateLimits, auditLog } = groundworkTables({ prefix: "app_gw_" });
     expect(getTableName(rateLimits)).toBe("app_gw_rate_limits");
     expect(indexNames(rateLimits)).toEqual(["app_gw_rate_limits_expires_at_idx"]);
+    expect(getTableName(auditLog)).toBe("app_gw_audit_log");
+    expect(indexNames(auditLog)).toEqual([
+      "app_gw_audit_log_occurred_at_idx",
+      "app_gw_audit_log_action_idx",
+      "app_gw_audit_log_entity_idx",
+      "app_gw_audit_log_actor_idx",
+    ]);
+  });
+
+  test("the audit log is append-only by construction: identity ids, a default timestamp", () => {
+    const { auditLog } = groundworkTables();
+    const columns = Object.fromEntries(getTableConfig(auditLog).columns.map((c) => [c.name, c]));
+    expect(columns.id?.primary).toBe(true);
+    expect(columns.id?.generatedIdentity?.type).toBe("always");
+    expect(columns.occurred_at?.hasDefault).toBe(true);
+    expect(columns.changes?.getSQLType()).toBe("jsonb");
+    expect(Object.keys(columns)).toEqual([
+      "id",
+      "occurred_at",
+      "actor_type",
+      "actor_id",
+      "actor_label",
+      "action",
+      "entity_type",
+      "entity_id",
+      "summary",
+      "changes",
+      "metadata",
+      "ip",
+      "request_id",
+    ]);
   });
 
   test("puts the tables in a Postgres schema and returns it for export", () => {
     const tables = groundworkTables({ schema: "ops" });
     expect(getTableConfig(tables.rateLimits).schema).toBe("ops");
+    expect(getTableConfig(tables.auditLog).schema).toBe("ops");
     expect(tables.schema.schemaName).toBe("ops");
     expect("schema" in groundworkTables()).toBe(false);
   });

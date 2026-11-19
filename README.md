@@ -42,7 +42,7 @@ groundwork takes a different shape:
 | --- | --- | --- |
 | [Table factories](docs/schema.md) | `groundwork/schema` | Built, unreleased |
 | [Rate limiting](docs/rate-limiting.md): fixed window and token bucket, optional Redis | `groundwork/rate-limit` | Built, unreleased |
-| Audit log with diffs and redaction | `groundwork/audit` | Planned (Phase 2) |
+| [Audit log](docs/audit.md) with diffs, redaction and keyset pagination | `groundwork/audit` | Built, unreleased |
 | Scoped API keys with rotation and IP allowlists | `groundwork/api-keys` | Planned (Phase 3) |
 | Background jobs and schedules | `groundwork/jobs` | Planned (Phase 4) |
 | Idempotency keys | `groundwork/idempotency` | Planned (Phase 5) |
