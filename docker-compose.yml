@@ -1,7 +1,7 @@
 # Postgres for the integration tests. CI uses this same file.
 #   bun run db:up                          # Postgres 18 on 127.0.0.1:54330
 #   POSTGRES_VERSION=16 bun run db:up      # the oldest supported major (run db:down first)
-# Data lives in tmpfs and durability is switched off: this database is disposable.
+# Data lives in tmpfs and durability is switched off: these databases are disposable.
 name: groundwork
 
 services:
@@ -27,6 +27,18 @@ services:
       - /var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U groundwork -d groundwork"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  # For the optional Redis rate-limit store. Postgres stays the only required infrastructure.
+  redis:
+    image: redis:${REDIS_VERSION:-8}-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-63790}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 1s
       timeout: 3s
       retries: 30

@@ -77,7 +77,7 @@
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
-    "db:up": "docker compose up -d --wait postgres",
+    "db:up": "docker compose up -d --wait postgres redis",
     "db:down": "docker compose down",
     "db:generate": "drizzle-kit generate",
     "db:drift": "bun scripts/check-migrations.ts",
@@ -96,10 +96,11 @@
     "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.11",
     "drizzle-orm": "0.45.4",
+    "ioredis": "6.0.0",
     "pg": "8.23.1",
     "postgres": "4.1.1",
     "publint": "0.3.25",
-    "tsdown": "0.23.7",
+    "redis": "6.3.1",
     "typescript": "7.0.2"
   }
 }

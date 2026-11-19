@@ -46,12 +46,23 @@ describe("package.json", () => {
     expect(pkg.dependencies ?? {}).toEqual({});
   });
 
-  test("every entry point loads", async () => {
+  test("each entry point exports exactly its public runtime API", async () => {
+    // Types are checked by the smoke test; this pins the values, so an accidental export shows up.
+    const expected: Record<string, string[]> = {
+      ".": ["GroundworkError", "createGroundwork", "isGroundworkError"],
+      "./schema": ["DEFAULT_PREFIX", "groundworkTables"],
+      "./rate-limit": ["createRateLimiter", "memoryStore", "redisStore"],
+      "./audit": [],
+      "./api-keys": [],
+      "./jobs": [],
+      "./idempotency": [],
+      "./next": [],
+      "./testing": ["createTestClock"],
+    };
     for (const subpath of SUBPATHS) {
       const file = subpath === "." ? "index.ts" : `${subpath.slice(2)}/index.ts`;
-      await import(join(root, "src", file));
+      const module = await import(join(root, "src", file));
+      expect([subpath, Object.keys(module).sort()]).toEqual([subpath, expected[subpath] ?? []]);
     }
-    const root_ = await import(join(root, "src", "index.ts"));
-    expect(Object.keys(root_).sort()).toEqual(["GroundworkError", "isGroundworkError"]);
   });
 });

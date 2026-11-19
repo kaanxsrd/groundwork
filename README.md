@@ -40,14 +40,14 @@ groundwork takes a different shape:
 
 | Module | Import | Status |
 | --- | --- | --- |
-| Table factories | `groundwork/schema` | Planned (Phase 1) |
-| Rate limiting: fixed window and token bucket | `groundwork/rate-limit` | Planned (Phase 1) |
+| [Table factories](docs/schema.md) | `groundwork/schema` | Built, unreleased |
+| [Rate limiting](docs/rate-limiting.md): fixed window and token bucket, optional Redis | `groundwork/rate-limit` | Built, unreleased |
 | Audit log with diffs and redaction | `groundwork/audit` | Planned (Phase 2) |
 | Scoped API keys with rotation and IP allowlists | `groundwork/api-keys` | Planned (Phase 3) |
 | Background jobs and schedules | `groundwork/jobs` | Planned (Phase 4) |
 | Idempotency keys | `groundwork/idempotency` | Planned (Phase 5) |
 | Next.js route helpers | `groundwork/next` | Planned (Phase 5) |
-| Test helpers for your app | `groundwork/testing` | Planned |
+| Test helpers for your app | `groundwork/testing` | Started (`createTestClock`) |
 
 ## Requirements
 
@@ -55,12 +55,13 @@ groundwork takes a different shape:
 - `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). The jobs module needs interactive transactions, so it doesn't work over `neon-http`.
 - Node.js 22+ or Bun 1.4+. ESM only.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
+- Optional: Redis, only if you choose the Redis rate-limit store (tested with Redis 8, ioredis 6 and node-redis 6).
 
 ## Develop
 
 ```sh
 bun install
-bun run db:up            # Postgres in Docker on 127.0.0.1:54330
+bun run db:up            # Postgres (127.0.0.1:54330) and Redis (:63790) in Docker
 bun run check            # Biome, TypeScript and unit tests
 bun run test             # everything, including the integration tests
 ```

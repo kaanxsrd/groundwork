@@ -169,7 +169,8 @@ async function ensureTemplate(admin: postgres.Sql): Promise<string> {
   return template;
 }
 
-function openConnection(url: string, driver: TestDriver, max: number): TestConnection {
+/** Opens a pool to any URL with the given driver, for example one that points at nothing. */
+export function openConnection(url: string, driver: TestDriver, max: number): TestConnection {
   if (driver === "postgres-js") {
     const client = postgres(url, { ...quiet(), max });
     return {

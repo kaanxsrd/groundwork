@@ -1,11 +1,13 @@
-// The Drizzle schema the integration tests run against. drizzle-kit generates
-// tests/migrations from this file, exactly as an app's drizzle-kit would from its own schema.
-// Phase 1 replaces the probe table with the groundwork table factories.
-import { bigserial, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+// The Drizzle schema the integration tests run against. drizzle-kit generates tests/migrations
+// from this file, exactly as an app's drizzle-kit would from its own schema.
+import { groundworkTables } from "../../src/schema/index.ts";
 
-/** A throwaway table that proves the harness creates tables and talks to Postgres. */
-export const harnessProbe = pgTable("gw_harness_probe", {
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  label: text("label").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+// What most apps do: the default "gw_" prefix in the default schema.
+export const { rateLimits } = groundworkTables();
+
+// A second set with another prefix in its own Postgres schema, to prove both options end to end.
+// The schema object is exported too, so drizzle-kit generates CREATE SCHEMA.
+export const { schema: altSchema, rateLimits: altRateLimits } = groundworkTables({
+  prefix: "alt_",
+  schema: "groundwork_alt",
 });

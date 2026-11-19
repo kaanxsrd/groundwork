@@ -1,0 +1,70 @@
+# Table factories
+
+groundwork's tables live in your Drizzle schema. You export them, and your drizzle-kit generates the migrations. groundwork never runs DDL itself.
+
+```ts
+// src/db/schema/groundwork.ts
+import { groundworkTables } from "groundwork/schema";
+
+export const { rateLimits } = groundworkTables();
+```
+
+Make sure drizzle-kit reads this file (it's covered by the `schema` glob in `drizzle.config.ts`), then:
+
+```sh
+npx drizzle-kit generate   # writes the migration; read it
+npx drizzle-kit migrate    # or apply it however you apply migrations today
+```
+
+**Only the tables you export are created.** Destructure just the ones for the modules you use. As more modules land, `groundworkTables()` returns more tables, but nothing changes in your database until you export them.
+
+## Options
+
+```ts
+groundworkTables({ prefix: "gw_", schema: undefined });
+```
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `prefix` | `"gw_"` | Prepended to every table and index name: `gw_rate_limits`, `gw_rate_limits_expires_at_idx`. The default keeps groundwork's tables apart from yours, so a hand-rolled `rate_limits` table can live next to `gw_rate_limits` while you migrate. `""` gives plain names. Lower-case letters, digits and underscores only. |
+| `schema` | none | A Postgres schema to put the tables in. Without it they go wherever your connection's `search_path` points, usually `public`. |
+
+When you set `schema`, **also export the returned `schema` object**. Without it drizzle-kit generates `CREATE TABLE "ops"."gw_rate_limits"` but no `CREATE SCHEMA`, and the migration fails on a fresh database:
+
+```ts
+export const { schema: groundworkSchema, rateLimits } = groundworkTables({ schema: "ops" });
+```
+
+If your app already exports a `pgSchema("ops")` of its own, you don't need to export groundwork's too.
+
+Invalid options throw a `GroundworkError` with code `invalid_config` when `groundworkTables()` runs. That includes a prefix long enough to push a name past Postgres's 63-character limit, so the problem surfaces at startup, not halfway through a migration.
+
+## The tables
+
+### `gw_rate_limits`
+
+One row per rule and subject seen recently. See [rate limiting](rate-limiting.md).
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `key` | `text` primary key | base64url HMAC-SHA256 of the algorithm, rule name and subject. The raw subject, such as an IP address, is never stored. |
+| `rule` | `text` | The rule's name, for operators. |
+| `used` | `double precision` | Fixed window: cost spent in the current window. Token bucket: tokens taken and not yet refilled as of `updated_at`. |
+| `updated_at` | `timestamptz` | When the row last changed. |
+| `expires_at` | `timestamptz` | From this moment the row means the same as no row. Indexed; `cleanup()` deletes by it. |
+
+## Using the tables directly
+
+They're ordinary Drizzle tables, so you can query them for dashboards or debugging:
+
+```ts
+import { count, desc } from "drizzle-orm";
+
+const hottest = await db
+  .select({ rule: rateLimits.rule, subjects: count() })
+  .from(rateLimits)
+  .groupBy(rateLimits.rule)
+  .orderBy(desc(count()));
+```
+
+Don't write to them yourself. The modules rely on invariants (such as `expires_at`) that a stray update can break.

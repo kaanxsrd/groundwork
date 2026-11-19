@@ -8,7 +8,7 @@ You need Bun 1.4, Docker and (for the smoke test) Node.js 22 or newer.
 
 ```sh
 bun install
-bun run db:up      # Postgres 18 on 127.0.0.1:54330, data in tmpfs
+bun run db:up      # Postgres 18 on 127.0.0.1:54330 and Redis 8 on :63790, data in tmpfs
 ```
 
 `POSTGRES_VERSION=16 bun run db:up` starts the oldest supported major instead (run `bun run db:down` first). Copy `.env.example` to `.env` to change the port or the defaults below.
@@ -19,10 +19,10 @@ bun run db:up      # Postgres 18 on 127.0.0.1:54330, data in tmpfs
 bun run check      # Biome, TypeScript, unit tests
 bun run test       # unit + integration tests (needs db:up)
 bun run db:drift   # fails if the fixture schema changed without a migration
-bun run smoke      # build, publint, attw, then the packed package on Node
+bun run smoke      # build, publint, attw, then the packed package on Node (needs db:up)
 ```
 
-CI runs all of these, and the integration tests against Postgres 16 and 18 with both drivers.
+CI runs all of these, and the integration tests against Postgres 16 and 18 with both drivers. Redis is only needed for the Redis rate-limit store tests; Postgres stays the only infrastructure groundwork requires.
 
 ## Tests
 
@@ -45,6 +45,7 @@ CI runs all of these, and the integration tests against Postgres 16 and 18 with 
   `database.current.connect()` opens a second, independent pool to the same database, for simulating another app instance. `database.current.rows(sql\`…\`)` runs raw SQL and returns rows whichever driver is active.
 
 - **Drivers.** `GW_TEST_DRIVER=node-postgres bun run test:integration` runs the integration tests over `pg` instead of `postgres` (postgres-js). Library code must work with both.
+- **Stores share one suite.** `tests/support/rate-limit-conformance.ts` runs the same scenarios against every rate-limit store (memory, Postgres on both drivers, Redis on ioredis and node-redis), and asserts that no answer came from the fallback. A new store, or a behaviour change, goes through it. Redis tests isolate themselves with a random key prefix per file instead of a database.
 - **Race tests must race.** Use separate pools (`connect()`) and `Promise.all`, never a loop of awaits, and assert on the final database state, not only on return values.
 - **Never only the happy path.** Every feature needs a test for how it fails.
 

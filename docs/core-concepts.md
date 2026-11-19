@@ -86,12 +86,14 @@ By default warnings and errors go to the console with a `[groundwork]` prefix. L
 
 ## Clocks
 
-Modules that depend on time take a `Clock`, an object with `now(): Date`. The default reads the system time. In tests, inject one you control:
+Modules that depend on time take a `Clock`, an object with `now(): Date`. Without one, each module uses the most trustworthy clock it has: rate limiting asks Postgres (or Redis), so app instances with skewed clocks still agree. In tests, inject a clock you control:
 
 ```ts
-import type { Clock } from "groundwork";
+import { createTestClock } from "groundwork/testing";
 
-let now = new Date("2026-01-01T00:00:00Z");
-const clock: Clock = { now: () => now };
-now = new Date(now.getTime() + 15 * 60_000); // jump 15 minutes
+const clock = createTestClock("2026-01-01T00:00:00Z");
+clock.advance("15m");      // or advance(250) for milliseconds
+clock.set("2026-06-01T00:00:00Z");
 ```
+
+Any object with `now(): Date` works too.

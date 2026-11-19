@@ -44,6 +44,7 @@ jobs:
       POSTGRES_VERSION: ${{ matrix.postgres }}
       GW_TEST_DRIVER: ${{ matrix.driver }}
       TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
+      TEST_REDIS_URL: redis://127.0.0.1:63790
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -53,13 +54,15 @@ jobs:
       - run: bun run test:integration
       - name: Again with parallel workers (the harness must be safe across processes)
         run: bun test tests/integration --parallel=4
-      - name: Postgres logs
+      - name: Database logs
         if: failure()
-        run: docker compose logs postgres
+        run: docker compose logs
 
   smoke:
     name: Built package on Node 22
     runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -67,6 +70,8 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - run: bun install --frozen-lockfile
+      - run: bun run db:up
       # Build, publint, are-the-types-wrong, then install the packed tarball into a fresh project:
-      # import every subpath on Node 22 and type-check a consumer with TypeScript 5.9, 6.0 and 7.0.
+      # import every subpath and rate-limit against Postgres on Node 22, and type-check a consumer
+      # with TypeScript 5.9, 6.0 and 7.0.
       - run: bun run smoke

@@ -21,5 +21,6 @@
     "noEmit": true,
     "types": ["node", "bun"]
   },
-  "include": ["src", "tests", "scripts", "drizzle.config.ts"]
+  "include": ["src", "tests", "scripts", "drizzle.config.ts"],
+  "exclude": ["scripts/smoke"]
 }
