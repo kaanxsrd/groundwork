@@ -1,5 +1,15 @@
 # @vantedev/groundwork
 
+## 0.2.0
+
+### Minor Changes
+
+- 377fc30: `audit.query({ offset })` skips that many entries, for admin pages with page numbers, with `count()` for the total. Up to 100,000, and not together with `cursor`. Unlike cursors, offsets can show an entry twice or skip one while the log grows.
+- 5191063: `jobs.list({ schedule })` lists one or more schedules' runs by name, and every job record has `schedule`, the schedule's name, or `null` for an enqueued job. The jobs docs also explain why an external cron on the same period as a schedule can run it only every other time.
+- 1bda996: `secret` can be a function, called once on first use: the first rate-limit check, key hash or idempotency claim. You can create `gw` at module scope when the environment isn't set during `next build`, and a worker that only cleans up or runs jobs needs no secret. A plain secret is still checked at startup, and both forms derive the same keys. The docs now say that reusing an existing app secret, such as `BETTER_AUTH_SECRET`, is safe.
+- 1f1b911: `pinoLogger(logger)` adapts pino, or any logger whose methods take `(context, message)`, to groundwork's `Logger`.
+- 971ef36: `apiKeys.verify()` returns the checks behind its headers. On success, `rateLimit` and `quota` (`limit`, `remaining`, `resetAt`), or `null` when the key has none. On a `rate_limited` or `quota_exceeded` failure, the check that denied it. Apps that send their own rate-limit headers no longer parse groundwork's.
+
 ## 0.1.0
 
 ### Minor Changes
