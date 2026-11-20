@@ -1,9 +1,9 @@
 /**
- * `@vante/groundwork/api-keys`: scoped API keys stored as HMAC hashes, with rotation, suspension, IP and
+ * `@vantedev/groundwork/api-keys`: scoped API keys stored as HMAC hashes, with rotation, suspension, IP and
  * origin allowlists, and per-key rate limits and quotas.
  *
  * ```ts
- * import { createApiKeys } from "@vante/groundwork/api-keys";
+ * import { createApiKeys } from "@vantedev/groundwork/api-keys";
  *
  * const apiKeys = createApiKeys({
  *   db, table: tables.apiKeys, secret, rateLimiter,

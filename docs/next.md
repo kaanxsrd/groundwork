@@ -1,6 +1,6 @@
 # Next.js route helpers
 
-`@vante/groundwork/next` wraps App Router route handlers with API-key checks, rate limits and idempotency, gives you a cron route for jobs, and reads the client's IP from the one proxy header you trust. It only uses the Web `Request` and `Response` and never imports `next`, so it also fits any framework with the same handler shape. CI tests it with Next.js 16.
+`@vantedev/groundwork/next` wraps App Router route handlers with API-key checks, rate limits and idempotency, gives you a cron route for jobs, and reads the client's IP from the one proxy header you trust. It only uses the Web `Request` and `Response` and never imports `next`, so it also fits any framework with the same handler shape. CI tests it with Next.js 16.
 
 ## Setup
 
@@ -8,7 +8,7 @@ Create the helpers once, next to your groundwork instance:
 
 ```ts
 // lib/groundwork.ts
-import { createRouteHelpers } from "@vante/groundwork/next";
+import { createRouteHelpers } from "@vantedev/groundwork/next";
 
 export const { withApiKey, withRateLimit, withIdempotency, clientIp } = createRouteHelpers(gw, {
   trustProxy: process.env.VERCEL ? "vercel" : "none",
@@ -81,7 +81,7 @@ An HTTP trigger for `gw.jobs.runOnce()`, for serverless hosts where nothing runs
 
 ```ts
 // app/api/jobs/route.ts
-import { jobsRoute } from "@vante/groundwork/next";
+import { jobsRoute } from "@vantedev/groundwork/next";
 import { env } from "@/lib/env";
 import { gw } from "@/lib/groundwork";
 import "@/lib/jobs"; // a worker only runs the job types it knows

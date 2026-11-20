@@ -75,7 +75,7 @@ groundwork/
   docs/
 ```
 
-Subpath exports: `groundwork`, `groundwork/schema`, `groundwork/rate-limit`, `groundwork/audit`, `groundwork/api-keys`, `groundwork/jobs`, `groundwork/idempotency`, `groundwork/next`, `groundwork/testing`. Each module also works standalone (`createRateLimiter({ db, table, secret })`). `createGroundwork` just wires them together. *Published as `@vante/groundwork` (decided 2026-11-20), so every subpath above is imported as `@vante/groundwork/…`.*
+Subpath exports: `groundwork`, `groundwork/schema`, `groundwork/rate-limit`, `groundwork/audit`, `groundwork/api-keys`, `groundwork/jobs`, `groundwork/idempotency`, `groundwork/next`, `groundwork/testing`. Each module also works standalone (`createRateLimiter({ db, table, secret })`). `createGroundwork` just wires them together. *Published as `@vantedev/groundwork` (decided 2026-11-20), so every subpath above is imported as `@vantedev/groundwork/…`.*
 
 **Tooling** (match my other repos):
 
@@ -372,7 +372,7 @@ Don't start the next phase until I approve.
 ### Phase 6: Docs + 0.1 release
 - [x] README in the same style as my other repos (banner, badges, quickstart, a short section per module, a comparison table with honest trade-offs)
 - [x] `docs/` with one page per module, plus migration notes for moving from hand-rolled tables
-- [ ] Publish `0.1.0` with provenance *(ready: versioned, release workflow and docs/releasing.md in place; waits on the npm org, a one-time token and the owner's go)*
+- [ ] Publish `0.1.0` with provenance *(ready: versioned, release workflow and docs/releasing.md in place; the first release is published by hand once the owner logs npm in)*
 
 ### Phase 7: Dogfooding, then 1.0
 - [ ] Faultline: swap the in-memory limiter (this fixes the multi-instance problem)
@@ -406,7 +406,7 @@ Read these before writing each module. Keep what works and fix what section 1 ca
 
 ## 9. Open decisions (ask me)
 
-- **Name and npm scope:** `groundwork` is a working name. Check npm and GitHub before Phase 6. **Decided 2026-11-20: `@vante/groundwork`** (`groundwork` is taken on npm), in the public repository `kaanxsrd/groundwork`.
+- **Name and npm scope:** `groundwork` is a working name. Check npm and GitHub before Phase 6. **Decided 2026-11-20: `@vantedev/groundwork`** (`groundwork` is taken on npm, and the `vante` org couldn't be created), in the public repository `kaanxsrd/groundwork`.
 - **License:** MIT recommended. My apps use GPL-3.0, but GPL on a *library* stops many companies from using it. **Decided 2026-11-19: MIT.**
 - **Redis adapter for rate limiting** in v1 or later? Hookline uses Redis today. **Decided 2026-11-19: in v1.**
 - **Minimum Postgres version.** **Decided 2026-11-19: 16. CI tests 16 and 18.**
@@ -649,6 +649,9 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - `docs/releasing.md`.
   
   The example's README now describes installing from npm, with `node scripts/example.mjs dev` for running it against the checkout.
+- 2026-11-20: The npm org `vante` couldn't be created, so the package is **`@vantedev/groundwork`**, under the owner's npm user `vantedev`, which also publishes `vaultdrop` and `hookline-cli`. A user scope needs no organization. 0.1.0 was never published, so the rename breaks nothing; this supersedes `@vante/groundwork` above.
+- 2026-11-20: The first release is published by hand from a clean checkout, as VaultDrop's CLI was, so 0.1.0 has no provenance; trusted publishing gives every later release provenance. The release workflow now skips publishing when the tagged version is already on npm, so tagging `v0.1.0` afterwards only runs the checks.
+- 2026-11-20: At the owner's request, every commit message was rewritten to Conventional Commits, without "Phase" wording or co-author trailers. The GitHub repository was then deleted and recreated, so its cached contributor list starts fresh. Claude Code files (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `PROMPT.md`) are ignored by git.
 
 ## 11. Alternatives check (2026-11-19)
 

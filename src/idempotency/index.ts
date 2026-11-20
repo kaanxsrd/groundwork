@@ -1,8 +1,8 @@
 /**
- * `@vante/groundwork/idempotency`: Idempotency-Key handling with stored responses.
+ * `@vantedev/groundwork/idempotency`: Idempotency-Key handling with stored responses.
  *
  * ```ts
- * import { createIdempotency } from "@vante/groundwork/idempotency";
+ * import { createIdempotency } from "@vantedev/groundwork/idempotency";
  *
  * const idempotency = createIdempotency({ db, table: idempotencyKeys, secret });
  *

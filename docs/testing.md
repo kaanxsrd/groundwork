@@ -14,7 +14,7 @@ The Docker Compose file and the harness in this repository ([`tests/support/data
 For unit tests that touch only rate limiting, the in-memory store needs no database:
 
 ```ts
-import { memoryStore } from "@vante/groundwork/rate-limit";
+import { memoryStore } from "@vantedev/groundwork/rate-limit";
 
 const gw = createGroundwork({ db, tables, secret, rateLimit: { store: memoryStore() } });
 ```
@@ -24,7 +24,7 @@ const gw = createGroundwork({ db, tables, secret, rateLimit: { store: memoryStor
 Windows, TTLs, expiry, retries and schedules all depend on time. Pass a test clock and move it yourself instead of sleeping:
 
 ```ts
-import { createTestClock } from "@vante/groundwork/testing";
+import { createTestClock } from "@vantedev/groundwork/testing";
 
 const clock = createTestClock("2026-01-01T00:00:00Z");
 const gw = createGroundwork({ db, tables, secret, clock });

@@ -1,6 +1,6 @@
-# Publishes @vante/groundwork to npm, with provenance, when a tag like v0.2.0 is pushed.
+# Publishes @vantedev/groundwork to npm, with provenance, when a tag like v0.2.0 is pushed.
 # Runs in the protected "npm" environment, so a maintainer approves each publish. Uses npm trusted
-# publishing (OIDC); only the very first release needs the NPM_TOKEN secret. See docs/releasing.md.
+# publishing (OIDC), set up after the first release was published by hand. See docs/releasing.md.
 name: Release
 
 on:
@@ -45,6 +45,8 @@ jobs:
             echo "::error::Unreleased changesets: run 'bun x changeset version' and commit first"; exit 1
           fi
           node -e "const p=require('./package.json'); if (!p.repository || p.publishConfig?.access !== 'public') { console.error('::error::package.json needs repository and publishConfig.access public'); process.exit(1) }"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PACKAGE=$(node -p "require('./package.json').name")" >> "$GITHUB_ENV"
 
       - run: bunx biome ci .
       - run: bun run typecheck
@@ -53,8 +55,14 @@ jobs:
       # Builds, then publint, are-the-types-wrong, and the packed tarball in a fresh project.
       - run: bun run smoke
 
+      # The first release is published by hand (docs/releasing.md); its tag then only runs the checks.
       - name: Publish to npm with provenance
-        run: npm publish --provenance --access public
+        run: |
+          if npm view "$PACKAGE@$VERSION" version > /dev/null 2>&1; then
+            echo "::notice::$PACKAGE@$VERSION is already on npm; nothing to publish."
+            exit 0
+          fi
+          npm publish --provenance --access public
         env:
           # Only for the first release, before trusted publishing is set up. Delete it afterwards.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -12,7 +12,7 @@
 <br>
 
 [![CI](https://img.shields.io/github/actions/workflow/status/kaanxsrd/groundwork/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/kaanxsrd/groundwork/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@vante/groundwork?style=flat-square&color=cb3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/@vante/groundwork)
+[![npm](https://img.shields.io/npm/v/@vantedev/groundwork?style=flat-square&color=cb3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/@vantedev/groundwork)
 [![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![PostgreSQL 16+](https://img.shields.io/badge/PostgreSQL-16%2B-4169e1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![Drizzle ORM](https://img.shields.io/badge/Drizzle-native-c5f74f?style=flat-square&logo=drizzle&logoColor=black)](https://orm.drizzle.team)
@@ -97,14 +97,14 @@ Safe retries per the IETF draft. A repeated request gets the stored response; a 
 In a Next.js app (`npx create-next-app@latest`) with a Postgres database:
 
 ```sh
-npm install @vante/groundwork drizzle-orm postgres
+npm install @vantedev/groundwork drizzle-orm postgres
 npm install -D drizzle-kit
 ```
 
 **1. Add groundwork's tables to your Drizzle schema**, and let drizzle-kit create them. Put `DATABASE_URL` in `.env.local`, plus `GROUNDWORK_SECRET` and `CRON_SECRET`, each from `openssl rand -base64 32`.
 
 ```ts filename="db/schema.ts"
-import { groundworkTables } from "@vante/groundwork/schema";
+import { groundworkTables } from "@vantedev/groundwork/schema";
 
 export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKeys } =
   groundworkTables();
@@ -132,8 +132,8 @@ npx drizzle-kit migrate
 
 ```ts filename="lib/groundwork.ts"
 import { drizzle } from "drizzle-orm/postgres-js";
-import { createGroundwork } from "@vante/groundwork";
-import { createRouteHelpers } from "@vante/groundwork/next";
+import { createGroundwork } from "@vantedev/groundwork";
+import { createRouteHelpers } from "@vantedev/groundwork/next";
 import postgres from "postgres";
 import * as tables from "@/db/schema";
 
@@ -184,7 +184,7 @@ export const POST = withApiKey(
 **4. Run jobs** from a cron route (Vercel Cron sends `CRON_SECRET` for you), or with `gw.jobs.work()` in a long-running process:
 
 ```ts filename="app/api/jobs/route.ts"
-import { jobsRoute } from "@vante/groundwork/next";
+import { jobsRoute } from "@vantedev/groundwork/next";
 import { gw } from "@/lib/groundwork";
 
 export const GET = jobsRoute(gw, { secret: process.env.CRON_SECRET ?? "" });
@@ -309,7 +309,7 @@ groundwork isn't for edge runtimes, databases other than Postgres, or stacks tha
 - `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`.
 - Node.js 22+ or Bun 1.4+. ESM only.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
-- For `@vante/groundwork/next`: nothing extra. It never imports `next`; CI tests it with Next.js 16.
+- For `@vantedev/groundwork/next`: nothing extra. It never imports `next`; CI tests it with Next.js 16.
 - Optional: Redis, only for the Redis rate-limit store (tested with Redis 8, ioredis 6 and node-redis 6).
 
 ## Documentation

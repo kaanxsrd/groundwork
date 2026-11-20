@@ -21,7 +21,7 @@ It follows [draft-ietf-httpapi-idempotency-key-header-08](https://datatracker.ie
    export const { idempotencyKeys } = groundworkTables();
    ```
 
-2. Wrap the handler. With [`@vante/groundwork/next`](next.md):
+2. Wrap the handler. With [`@vantedev/groundwork/next`](next.md):
 
    ```ts
    export const POST = withApiKey(

@@ -1,9 +1,9 @@
 /**
- * `@vante/groundwork/jobs`: background jobs and schedules on Postgres, enqueued inside your
+ * `@vantedev/groundwork/jobs`: background jobs and schedules on Postgres, enqueued inside your
  * transactions, with leases, retries with jittered backoff, timeouts and health checks.
  *
  * ```ts
- * import { createJobs } from "@vante/groundwork/jobs";
+ * import { createJobs } from "@vantedev/groundwork/jobs";
  *
  * const jobs = createJobs({ db, table: tables.jobs, schedulesTable: tables.jobSchedules });
  *

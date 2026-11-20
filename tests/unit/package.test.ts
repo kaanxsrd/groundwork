@@ -28,7 +28,7 @@ const SUBPATHS = [
 
 describe("package.json", () => {
   test("is the public scoped package, linked to the repository that publishes it", () => {
-    expect(pkg.name).toBe("@vante/groundwork");
+    expect(pkg.name).toBe("@vantedev/groundwork");
     // Scoped packages are private unless published with access public.
     expect(pkg.publishConfig.access).toBe("public");
     // npm provenance checks this against the GitHub repository that ran the publish.

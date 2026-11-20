@@ -1,9 +1,9 @@
 /**
- * `@vante/groundwork/schema`: table factories for your Drizzle schema.
+ * `@vantedev/groundwork/schema`: table factories for your Drizzle schema.
  *
  * ```ts
  * // db/schema/groundwork.ts
- * import { groundworkTables } from "@vante/groundwork/schema";
+ * import { groundworkTables } from "@vantedev/groundwork/schema";
  *
  * export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKeys } =
  *   groundworkTables();

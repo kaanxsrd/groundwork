@@ -1,9 +1,9 @@
 /**
- * `@vante/groundwork/rate-limit`: fixed-window and token-bucket rate limiting in Postgres, with an
+ * `@vantedev/groundwork/rate-limit`: fixed-window and token-bucket rate limiting in Postgres, with an
  * in-memory fallback and an optional Redis store.
  *
  * ```ts
- * import { createRateLimiter } from "@vante/groundwork/rate-limit";
+ * import { createRateLimiter } from "@vantedev/groundwork/rate-limit";
  *
  * const limiter = createRateLimiter({ db, table: rateLimits, secret: env.GROUNDWORK_SECRET });
  * export const loginLimit = limiter.rule({ name: "login:ip", limit: 5, window: "15m" });

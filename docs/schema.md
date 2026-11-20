@@ -4,7 +4,7 @@ groundwork's tables live in your Drizzle schema. You export them, and your drizz
 
 ```ts
 // src/db/schema/groundwork.ts
-import { groundworkTables } from "@vante/groundwork/schema";
+import { groundworkTables } from "@vantedev/groundwork/schema";
 
 export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKeys } =
   groundworkTables();

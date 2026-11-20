@@ -9,8 +9,8 @@ import { client } from "./http.mjs";
 // Step 5's gw.apiKeys.create(), with the quickstart's namespace and scope.
 const CREATE_KEY = [
   'import { drizzle } from "drizzle-orm/postgres-js";',
-  'import { createGroundwork } from "@vante/groundwork";',
-  'import { groundworkTables } from "@vante/groundwork/schema";',
+  'import { createGroundwork } from "@vantedev/groundwork";',
+  'import { groundworkTables } from "@vantedev/groundwork/schema";',
   'import postgres from "postgres";',
   "const client = postgres(process.env.DATABASE_URL, { max: 1, onnotice: () => {} });",
   "const gw = createGroundwork({",

@@ -3,7 +3,7 @@
  * scoped API keys, background jobs and idempotency keys.
  *
  * ```ts
- * import { createGroundwork } from "@vante/groundwork";
+ * import { createGroundwork } from "@vantedev/groundwork";
  * import * as tables from "./db/schema/groundwork";
  *
  * export const gw = createGroundwork({

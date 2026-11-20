@@ -131,7 +131,7 @@ for (const version of tsVersions) {
       }
       // With skipLibCheck off, drizzle-orm's declarations for dialects we never use report errors
       // under some TypeScript versions. Those are upstream's. Any other error (in types.ts, or in
-      // node_modules/@vante/groundwork) fails the step.
+      // node_modules/@vantedev/groundwork) fails the step.
       const errors = output.split(/\r?\n/).filter((line) => /error TS\d+/.test(line));
       const ours = errors.filter((line) => !isUpstreamError(line));
       if (ours.length > 0 || (errors.length === 0 && /error/i.test(output))) {

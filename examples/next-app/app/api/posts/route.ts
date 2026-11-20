@@ -1,4 +1,4 @@
-import { diff } from "@vante/groundwork/audit";
+import { diff } from "@vantedev/groundwork/audit";
 import { desc } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";

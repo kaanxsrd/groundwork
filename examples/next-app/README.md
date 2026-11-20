@@ -16,7 +16,7 @@ The config is what `create-next-app` 16.4 generates, Cache Components included. 
 
 ## Run it
 
-With `@vante/groundwork` from npm: `npm install`, copy `.env.example` to `.env.local` and fill it in, then `npm run db:migrate` and `npm run dev`.
+With `@vantedev/groundwork` from npm: `npm install`, copy `.env.example` to `.env.local` and fill it in, then `npm run db:migrate` and `npm run dev`.
 
 To run it against this checkout instead, from the repo root:
 

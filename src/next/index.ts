@@ -1,10 +1,10 @@
 /**
- * `@vante/groundwork/next`: route-handler helpers for Next.js. They only use the Web `Request` and
+ * `@vantedev/groundwork/next`: route-handler helpers for Next.js. They only use the Web `Request` and
  * `Response`, so they also work in any framework with the same handler shape.
  *
  * ```ts
  * // lib/route.ts
- * import { createRouteHelpers } from "@vante/groundwork/next";
+ * import { createRouteHelpers } from "@vantedev/groundwork/next";
  * export const { withApiKey, withRateLimit, withIdempotency, clientIp } =
  *   createRouteHelpers(gw, { trustProxy: "vercel" });
  *
