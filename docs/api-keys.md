@@ -139,7 +139,7 @@ With both modules wired through `createGroundwork`, every change is recorded as 
 On their own:
 
 ```ts
-import { apiKeyAuditEvent, createApiKeys } from "groundwork/api-keys";
+import { apiKeyAuditEvent, createApiKeys } from "@vante/groundwork/api-keys";
 
 createApiKeys({ …, onEvent: (event) => audit.record(apiKeyAuditEvent(event), { tx: event.tx }) });
 ```

@@ -1,9 +1,6 @@
 // Type-checked in the smoke project with several TypeScript versions, never run. Each expected
 // error below becomes a build failure if the types it guards collapse to `any`.
 
-import { sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   createGroundwork,
   type Duration,
@@ -11,15 +8,18 @@ import {
   type GroundworkErrorCode,
   isGroundworkError,
   type Logger,
-} from "groundwork";
-import { createApiKeys, type VerifyResult } from "groundwork/api-keys";
-import { type AuditEntry, createAuditLog, diff } from "groundwork/audit";
-import { createIdempotency, type Jsonify, type RunResult } from "groundwork/idempotency";
-import { createJobs, type RunSummary, type StandardSchemaV1 } from "groundwork/jobs";
-import { createRouteHelpers, getClientIp, jobsRoute } from "groundwork/next";
-import { createRateLimiter, type RateLimitResult, redisStore } from "groundwork/rate-limit";
-import { groundworkTables } from "groundwork/schema";
-import { createTestClock } from "groundwork/testing";
+} from "@vante/groundwork";
+import { createApiKeys, type VerifyResult } from "@vante/groundwork/api-keys";
+import { type AuditEntry, createAuditLog, diff } from "@vante/groundwork/audit";
+import { createIdempotency, type Jsonify, type RunResult } from "@vante/groundwork/idempotency";
+import { createJobs, type RunSummary, type StandardSchemaV1 } from "@vante/groundwork/jobs";
+import { createRouteHelpers, getClientIp, jobsRoute } from "@vante/groundwork/next";
+import { createRateLimiter, type RateLimitResult, redisStore } from "@vante/groundwork/rate-limit";
+import { groundworkTables } from "@vante/groundwork/schema";
+import { createTestClock } from "@vante/groundwork/testing";
+import { sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 const window: Duration = "15m";
 // @ts-expect-error a duration needs a unit

@@ -1,4 +1,4 @@
-import { jobsRoute } from "groundwork/next";
+import { jobsRoute } from "@vante/groundwork/next";
 import { env } from "@/lib/env";
 import { gw } from "@/lib/groundwork";
 // Defines the jobs and schedules: a worker only runs the job types it knows.

@@ -1,10 +1,10 @@
 // Runs in the smoke project under plain Node: migrates a fresh database with the SQL drizzle-kit
 // generated from groundworkTables(), then uses every module against it through the published API.
 import assert from "node:assert/strict";
+import { createGroundwork } from "@vante/groundwork";
+import { groundworkTables } from "@vante/groundwork/schema";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { createGroundwork } from "groundwork";
-import { groundworkTables } from "groundwork/schema";
 import postgres from "postgres";
 
 const maintenanceUrl = process.env.SMOKE_DATABASE_URL;
@@ -99,7 +99,7 @@ try {
   ]);
 
   // Idempotency and the route helpers: a retry replays, through groundwork/next as an app uses it.
-  const { createRouteHelpers, jobsRoute } = await import("groundwork/next");
+  const { createRouteHelpers, jobsRoute } = await import("@vante/groundwork/next");
   const { withApiKey, withIdempotency } = createRouteHelpers(gw);
   const { key: writer } = await gw.apiKeys.create({ name: "writer", scopes: ["posts:write"] });
   let created = 0;

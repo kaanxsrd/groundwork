@@ -1,5 +1,5 @@
-import { createGroundwork } from "groundwork";
-import { createRouteHelpers } from "groundwork/next";
+import { createGroundwork } from "@vante/groundwork";
+import { createRouteHelpers } from "@vante/groundwork/next";
 import { db } from "@/db";
 import * as tables from "@/db/schema/groundwork";
 import { env } from "@/lib/env";

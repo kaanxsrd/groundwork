@@ -8,7 +8,7 @@ Fixed-window and token-bucket rate limits stored in your Postgres, checked in on
 
    ```ts
    // src/db/schema/groundwork.ts
-   import { groundworkTables } from "groundwork/schema";
+   import { groundworkTables } from "@vante/groundwork/schema";
    export const { rateLimits } = groundworkTables();
    ```
 
@@ -16,7 +16,7 @@ Fixed-window and token-bucket rate limits stored in your Postgres, checked in on
 
    ```ts
    // src/lib/rate-limits.ts
-   import { createGroundwork } from "groundwork";
+   import { createGroundwork } from "@vante/groundwork";
    import { db } from "@/db";
    import * as tables from "@/db/schema/groundwork";
 
@@ -32,7 +32,7 @@ Fixed-window and token-bucket rate limits stored in your Postgres, checked in on
    });
    ```
 
-   Using only rate limiting? `createRateLimiter({ db, table: rateLimits, secret })` from `groundwork/rate-limit` does the same without `createGroundwork`.
+   Using only rate limiting? `createRateLimiter({ db, table: rateLimits, secret })` from `@vante/groundwork/rate-limit` does the same without `createGroundwork`.
 
 3. Check, and pass the headers on:
 
@@ -120,7 +120,7 @@ The in-memory fallback keeps at most `memory.maxKeys` subjects (default 10,000) 
 **Redis**, if you already run it:
 
 ```ts
-import { redisStore } from "groundwork/rate-limit";
+import { redisStore } from "@vante/groundwork/rate-limit";
 
 // ioredis
 const store = redisStore({
@@ -143,7 +143,7 @@ One Lua script per check, with the same semantics as Postgres. Keys are `gw:rl:<
 By default each store uses its own clock: Postgres's `clock_timestamp()`, or Redis's `TIME`. App instances with skewed clocks still agree about when a window ends. Inject a `clock` to control time in tests:
 
 ```ts
-import { createTestClock } from "groundwork/testing";
+import { createTestClock } from "@vante/groundwork/testing";
 
 const clock = createTestClock("2026-01-01T00:00:00Z");
 const limiter = createRateLimiter({ db, table: rateLimits, secret, clock });

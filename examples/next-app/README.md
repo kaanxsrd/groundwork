@@ -16,7 +16,9 @@ The config is what `create-next-app` 16.4 generates, Cache Components included. 
 
 ## Run it
 
-groundwork isn't on npm yet, so run the example against this checkout. From the repo root:
+With `@vante/groundwork` from npm: `npm install`, copy `.env.example` to `.env.local` and fill it in, then `npm run db:migrate` and `npm run dev`.
+
+To run it against this checkout instead, from the repo root:
 
 ```sh
 bun install
@@ -24,7 +26,7 @@ bun run db:up                       # Postgres in Docker
 node scripts/example.mjs dev        # packs groundwork, installs this app in a temp folder, runs next dev
 ```
 
-It prints the secrets it generated. Once groundwork is published, the usual way works too: `npm install`, copy `.env.example` to `.env.local` and fill it in, `npm run db:migrate`, `npm run dev`.
+It packs the package, installs it into a copy of this app, and prints the secrets it generated.
 
 ## Try it
 

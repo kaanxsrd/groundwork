@@ -1,0 +1,60 @@
+# Publishes @vante/groundwork to npm, with provenance, when a tag like v0.2.0 is pushed.
+# Runs in the protected "npm" environment, so a maintainer approves each publish. Uses npm trusted
+# publishing (OIDC); only the very first release needs the NPM_TOKEN secret. See docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC: trusted publishing and provenance
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: "1.4.2"
+  TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@latest
+      - run: bun install --frozen-lockfile
+
+      - name: Tag matches the version, and nothing is left unreleased
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION"; exit 1
+          fi
+          if ls .changeset/*.md 2>/dev/null | grep -v '/README.md$'; then
+            echo "::error::Unreleased changesets: run 'bun x changeset version' and commit first"; exit 1
+          fi
+          node -e "const p=require('./package.json'); if (!p.repository || p.publishConfig?.access !== 'public') { console.error('::error::package.json needs repository and publishConfig.access public'); process.exit(1) }"
+
+      - run: bunx biome ci .
+      - run: bun run typecheck
+      - run: bun run db:up
+      - run: bun run test
+      # Builds, then publint, are-the-types-wrong, and the packed tarball in a fresh project.
+      - run: bun run smoke
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
+        env:
+          # Only for the first release, before trusted publishing is set up. Delete it afterwards.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

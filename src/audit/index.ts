@@ -1,9 +1,9 @@
 /**
- * `groundwork/audit`: an append-only audit log in your Postgres, with typed actions, diffs,
+ * `@vante/groundwork/audit`: an append-only audit log in your Postgres, with typed actions, diffs,
  * redaction and keyset pagination.
  *
  * ```ts
- * import { createAuditLog, diff } from "groundwork/audit";
+ * import { createAuditLog, diff } from "@vante/groundwork/audit";
  *
  * const audit = createAuditLog({ db, table: auditLog, actions: ["post.create", "post.update"] });
  *

@@ -8,14 +8,14 @@ An append-only record of who did what, stored in your Postgres. Entries are writ
 
    ```ts
    // src/db/schema/groundwork.ts
-   import { groundworkTables } from "groundwork/schema";
+   import { groundworkTables } from "@vante/groundwork/schema";
    export const { auditLog } = groundworkTables();
    ```
 
 2. Declare your actions once:
 
    ```ts
-   import { createGroundwork } from "groundwork";
+   import { createGroundwork } from "@vante/groundwork";
    import * as tables from "@/db/schema/groundwork";
 
    export const gw = createGroundwork({
@@ -30,12 +30,12 @@ An append-only record of who did what, stored in your Postgres. Entries are writ
    });
    ```
 
-   Using only the audit log? `createAuditLog({ db, table: auditLog, actions })` from `groundwork/audit` does the same.
+   Using only the audit log? `createAuditLog({ db, table: auditLog, actions })` from `@vante/groundwork/audit` does the same.
 
 3. Record inside the transaction that makes the change:
 
    ```ts
-   import { diff } from "groundwork/audit";
+   import { diff } from "@vante/groundwork/audit";
 
    await db.transaction(async (tx) => {
      const [before] = await tx.select().from(posts).where(eq(posts.id, id));

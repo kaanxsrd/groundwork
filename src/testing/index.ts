@@ -1,5 +1,5 @@
 /**
- * `groundwork/testing`: helpers for testing apps that use groundwork.
+ * `@vante/groundwork/testing`: helpers for testing apps that use groundwork.
  *
  * @module
  */

@@ -27,6 +27,7 @@ import postgres from "postgres";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const exampleDir = join(root, "examples", "next-app");
+const packageName = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).name;
 const mode = process.argv[2] ?? "all";
 const modes = ["all", "example", "quickstart", "generate", "dev"];
 if (!modes.includes(mode)) throw new Error(`Usage: node scripts/example.mjs [${modes.join("|")}]`);
@@ -157,7 +158,7 @@ async function installExample(target) {
     });
     const pkgPath = join(target, "package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    pkg.dependencies.groundwork = pathToFileURL(tarball).href;
+    pkg.dependencies[packageName] = pathToFileURL(tarball).href;
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
     run("npm install --no-audit --no-fund --loglevel=error", target);
   });
@@ -239,7 +240,9 @@ async function quickstart() {
   );
   for (const command of commands.filter((c) => c.startsWith("npm install"))) {
     // The README installs groundwork from npm; this installs the tarball under test instead.
-    const local = command.replace(/(?<=\s)groundwork(?=\s|$)/, `"${pathToFileURL(tarball).href}"`);
+    const local = command.replace(` ${packageName}`, ` "${pathToFileURL(tarball).href}"`);
+    if (command.includes(packageName) && local === command)
+      throw new Error(`Could not swap ${packageName} in: ${command}`);
     await step(command, () => run(`${local} --no-audit --no-fund --loglevel=error`, app));
   }
   await step(`write the README's ${files.length} files`, () => {

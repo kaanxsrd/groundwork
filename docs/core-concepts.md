@@ -3,7 +3,7 @@
 Things every groundwork module shares. Types are exported from the root entry point:
 
 ```ts
-import { type Duration, GroundworkError, isGroundworkError, type Logger, type Clock, type Secret } from "groundwork";
+import { type Duration, GroundworkError, isGroundworkError, type Logger, type Clock, type Secret } from "@vante/groundwork";
 ```
 
 ## Durations
@@ -68,7 +68,7 @@ Expected outcomes are not errors: a denied rate-limit check or a rejected API ke
 groundwork logs rarely: a degraded mode (such as falling back to the in-memory rate limiter while Postgres is down) is logged once, not on every request. Pass any object with `warn` and `error` methods; `debug` and `info` are optional.
 
 ```ts
-import type { Logger } from "groundwork";
+import type { Logger } from "@vante/groundwork";
 
 const logger: Logger = console; // works as is
 ```
@@ -89,7 +89,7 @@ By default warnings and errors go to the console with a `[groundwork]` prefix. L
 Modules that depend on time take a `Clock`, an object with `now(): Date`. Without one, each module uses the most trustworthy clock it has: rate limiting asks Postgres (or Redis), so app instances with skewed clocks still agree. In tests, inject a clock you control:
 
 ```ts
-import { createTestClock } from "groundwork/testing";
+import { createTestClock } from "@vante/groundwork/testing";
 
 const clock = createTestClock("2026-01-01T00:00:00Z");
 clock.advance("15m");      // or advance(250) for milliseconds

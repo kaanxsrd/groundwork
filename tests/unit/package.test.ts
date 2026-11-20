@@ -9,6 +9,9 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   dependencies?: Record<string, string>;
   sideEffects: boolean;
   type: string;
+  name: string;
+  repository: { type: string; url: string };
+  publishConfig: { access: string };
 };
 
 const SUBPATHS = [
@@ -24,6 +27,17 @@ const SUBPATHS = [
 ];
 
 describe("package.json", () => {
+  test("is the public scoped package, linked to the repository that publishes it", () => {
+    expect(pkg.name).toBe("@vante/groundwork");
+    // Scoped packages are private unless published with access public.
+    expect(pkg.publishConfig.access).toBe("public");
+    // npm provenance checks this against the GitHub repository that ran the publish.
+    expect(pkg.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/kaanxsrd/groundwork.git",
+    });
+  });
+
   test("exports exactly the subpaths in PLAN.md", () => {
     expect(Object.keys(pkg.exports).filter((key) => key !== "./package.json")).toEqual(SUBPATHS);
   });

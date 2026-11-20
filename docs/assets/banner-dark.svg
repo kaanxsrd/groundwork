@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">groundwork</title>
+  <desc id="desc">The plumbing every Postgres app rebuilds, in your own Drizzle schema: rate limits, audit log, API keys, jobs and idempotency keys, layered like strata.</desc>
+  <rect width="1280" height="320" rx="24" fill="#0b1120"/>
+  <rect x="0.5" y="0.5" width="1279" height="319" rx="23.5" fill="none" stroke="#1e293b"/>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <text x="80" y="150" font-size="84" font-weight="700" letter-spacing="-2" fill="#f1f5f9">groundwork</text>
+    <text x="84" y="200" font-size="26" fill="#94a3b8">The plumbing every Postgres app rebuilds,</text>
+    <text x="84" y="236" font-size="26" fill="#94a3b8">in your own Drizzle schema.</text>
+  </g>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#ffffff">
+    <rect x="800" y="52" width="400" height="38" rx="6" fill="#a5b4fc"/>
+    <text x="822" y="77" fill="#1e1b4b">rate limits</text>
+    <rect x="770" y="98" width="430" height="38" rx="6" fill="#818cf8"/>
+    <text x="792" y="123" fill="#1e1b4b">audit log</text>
+    <rect x="820" y="144" width="380" height="38" rx="6" fill="#6366f1"/>
+    <text x="842" y="169">api keys</text>
+    <rect x="750" y="190" width="450" height="38" rx="6" fill="#4f46e5"/>
+    <text x="772" y="215">jobs + schedules</text>
+    <rect x="790" y="236" width="410" height="38" rx="6" fill="#4338ca"/>
+    <text x="812" y="261">idempotency keys</text>
+  </g>
+  <line x1="740" y1="286" x2="1210" y2="286" stroke="#334155" stroke-width="2"/>
+  <text x="1210" y="306" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" fill="#64748b">postgres · drizzle · typescript</text>
+</svg>

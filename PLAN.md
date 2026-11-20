@@ -75,7 +75,7 @@ groundwork/
   docs/
 ```
 
-Subpath exports: `groundwork`, `groundwork/schema`, `groundwork/rate-limit`, `groundwork/audit`, `groundwork/api-keys`, `groundwork/jobs`, `groundwork/idempotency`, `groundwork/next`, `groundwork/testing`. Each module also works standalone (`createRateLimiter({ db, table, secret })`). `createGroundwork` just wires them together.
+Subpath exports: `groundwork`, `groundwork/schema`, `groundwork/rate-limit`, `groundwork/audit`, `groundwork/api-keys`, `groundwork/jobs`, `groundwork/idempotency`, `groundwork/next`, `groundwork/testing`. Each module also works standalone (`createRateLimiter({ db, table, secret })`). `createGroundwork` just wires them together. *Published as `@vante/groundwork` (decided 2026-11-20), so every subpath above is imported as `@vante/groundwork/…`.*
 
 **Tooling** (match my other repos):
 
@@ -370,9 +370,9 @@ Don't start the next phase until I approve.
 - **Done when:** the README quickstart works copy-pasted into a fresh Next.js app.
 
 ### Phase 6: Docs + 0.1 release
-- [ ] README in the same style as my other repos (banner, badges, quickstart, a short section per module, a comparison table with honest trade-offs)
-- [ ] `docs/` with one page per module, plus migration notes for moving from hand-rolled tables
-- [ ] Publish `0.1.0` with provenance
+- [x] README in the same style as my other repos (banner, badges, quickstart, a short section per module, a comparison table with honest trade-offs)
+- [x] `docs/` with one page per module, plus migration notes for moving from hand-rolled tables
+- [ ] Publish `0.1.0` with provenance *(ready: versioned, release workflow and docs/releasing.md in place; waits on the npm org, a one-time token and the owner's go)*
 
 ### Phase 7: Dogfooding, then 1.0
 - [ ] Faultline: swap the in-memory limiter (this fixes the multi-instance problem)
@@ -406,7 +406,7 @@ Read these before writing each module. Keep what works and fix what section 1 ca
 
 ## 9. Open decisions (ask me)
 
-- **Name and npm scope:** `groundwork` is a working name. Check npm and GitHub before Phase 6.
+- **Name and npm scope:** `groundwork` is a working name. Check npm and GitHub before Phase 6. **Decided 2026-11-20: `@vante/groundwork`** (`groundwork` is taken on npm), in the public repository `kaanxsrd/groundwork`.
 - **License:** MIT recommended. My apps use GPL-3.0, but GPL on a *library* stops many companies from using it. **Decided 2026-11-19: MIT.**
 - **Redis adapter for rate limiting** in v1 or later? Hookline uses Redis today. **Decided 2026-11-19: in v1.**
 - **Minimum Postgres version.** **Decided 2026-11-19: 16. CI tests 16 and 18.**
@@ -625,6 +625,30 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - problem+json error bodies;
   - waiting for an in-flight duplicate instead of answering 409;
   - IPv6 /64 bucketing.
+- 2026-11-20 (Phase 6): The owner replied "continue" to the Phase 5 report, which I took as approval of Phase 5.
+- 2026-11-20: Two Phase 6 decisions, asked and answered:
+  - **Name:** `groundwork` is taken on npm by an unrelated scaffolding tool (0.2.1, last changed 2023). The package is now **`@vante/groundwork`**, matching `author: "Vante"`. Every import is `@vante/groundwork/<subpath>`; the product is still called groundwork. The unscoped `groundwork-pg` and `drizzle-groundwork` were the alternatives (the second reads like an official Drizzle package).
+  - **Repository:** the owner approved creating **public** `kaanxsrd/groundwork`, where the five sibling apps live, and pushing `main`. npm provenance needs a public repository. The first GitHub Actions run passed all 7 jobs on Linux, including the Next.js example and README quickstart.
+- 2026-11-20: §9 had asked to check the name before Phase 6, and I should have raised it in an earlier report; it came up when Phase 5 ended.
+- 2026-11-20: The rename is a scripted, reviewed replacement of import specifiers, install commands, changeset front matter and backticked import paths. It leaves the Docker database URLs (`postgres://groundwork:groundwork@…`) and the product name alone. `package.json` gained `repository` (provenance checks it against the publishing repo), `homepage`, `bugs` and `publishConfig.access: "public"` (scoped packages are private otherwise); a unit test pins them. `scripts/example.mjs` and the smoke test read the name from `package.json`, so a future rename is one line.
+- 2026-11-20: A literal NUL byte had been committed in `docs/schema.md` in Phase 5, where a Python edit turned the text `\u0000` into the character. Git showed the file as binary. Fixed, and every tracked file was scanned: it was the only one.
+- 2026-11-20: Releases follow VaultDrop's CLI process (`docs/publishing-cli.md` there), adapted for Changesets:
+  - `bun x changeset version`, commit, tag `vX.Y.Z`.
+  - `.github/workflows/release.yml` runs in a protected `npm` environment. It checks that the tag matches the version, that no changesets are left, and that `repository` and `access` are set. Then it runs Biome, tsc, the full suite against Postgres and Redis, and the smoke test, and publishes with `npm publish --provenance --access public`.
+  - npm only connects trusted publishing to a package that exists, so the first release uses an `NPM_TOKEN` environment secret once. Published from the workflow, 0.1.0 still gets provenance. The token is then replaced by trusted publishing and tokens are disallowed. [docs/releasing.md](docs/releasing.md) has every step, including a manual fallback without provenance.
+- 2026-11-20: `bun x changeset version` turned the seven changesets (Phases 0–5 and the rename) into 0.1.0 and `CHANGELOG.md`. Publishing is the one step left. It needs the owner to create the `vante` npm organization and the token, and to approve pushing the release commit and the `v0.1.0` tag. Nothing has been published.
+- 2026-11-20: The README follows VaultDrop's and Hookline's layout:
+  - light and dark banners (hand-written SVG, rendered and checked), badges including CI and npm, and a links row;
+  - "Why", a two-column "What's inside" grid, the CI-tested quickstart (kept byte for byte), a short section per module with code, and "Compared with", which says for each module when another tool fits better;
+  - requirements, a documentation table, and a footer.
+  
+  It no longer says "one round trip on hot paths". A rate-limit check is one, but key verification can take up to three (the Phase 3 decision).
+- 2026-11-20: New docs:
+  - `docs/migrating.md`: the side-by-side approach, what to do with each module's old data (with links to the per-module SQL), an atomic move of vante.app's pending jobs, and an order per app;
+  - `docs/testing.md`: real Postgres, `createTestClock` (and the shared-clock pitfall found in Phase 4), `runOnce()` in tests, calling route handlers directly, and asserting the logger stayed quiet;
+  - `docs/releasing.md`.
+  
+  The example's README now describes installing from npm, with `node scripts/example.mjs dev` for running it against the checkout.
 
 ## 11. Alternatives check (2026-11-19)
 

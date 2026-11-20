@@ -1,5 +1,5 @@
+import { diff } from "@vante/groundwork/audit";
 import { desc } from "drizzle-orm";
-import { diff } from "groundwork/audit";
 import { z } from "zod";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
