@@ -95,6 +95,12 @@ export interface AuditQuery<TAction extends string = string, TEntity extends str
   readonly cursor?: string | null | undefined;
   /** Entries per page, 1 to 1,000. Defaults to 50. */
   readonly limit?: number | undefined;
+  /**
+   * Skips this many entries, for page numbers ("page 7 of 30", with `count()` for the total).
+   * 0 to 100,000, and not together with `cursor`. Unlike cursors, offsets can show an entry twice
+   * or skip one while the log grows.
+   */
+  readonly offset?: number | undefined;
 }
 
 export interface AuditPage<TAction extends string = string, TEntity extends string = string> {

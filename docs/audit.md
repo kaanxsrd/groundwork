@@ -155,7 +155,7 @@ db.select({ action: auditLog.action, at: auditLog.occurredAt, name: users.name }
 
 ### What pagination guarantees
 
-Pages are keyset pages on `(occurred_at, id)`, never offsets. While you page through:
+Cursor pages are keyset pages on `(occurred_at, id)`. While you page through with a cursor:
 
 - **no entry appears twice**, even while others are being written;
 - **every entry that was committed before you started appears exactly once**;
@@ -163,7 +163,19 @@ Pages are keyset pages on `(occurred_at, id)`, never offsets. While you page thr
 
 The integration tests check all three under concurrent writers, including 100 entries that share one timestamp.
 
-Page numbers ("page 7 of 30") need offsets, which do show duplicates and skip entries while the log grows. Use `count()` for the total, and *newer* / *older* links for navigation.
+### Page numbers
+
+An admin page with numbered pages ("page 7 of 30") can pass `offset` instead of `cursor`, with `count()` for the total:
+
+```ts
+const pageSize = 50;
+const [page, total] = await Promise.all([
+  gw.audit.query({ ...filters, limit: pageSize, offset: (pageNumber - 1) * pageSize }),
+  gw.audit.count(filters),
+]);
+```
+
+Offsets don't have the guarantees above: while the log grows, an entry can show on two pages or on none. `offset` goes up to 100,000; page further with cursors. It can't be combined with `cursor`.
 
 ## Retention
 

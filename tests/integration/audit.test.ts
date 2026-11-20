@@ -338,6 +338,28 @@ describe("query and count", () => {
     expect((await audit.query({ limit: 6 })).nextCursor).toBeNull();
   });
 
+  test("pages by offset, for page numbers", async () => {
+    expect(await summaries({ limit: 2, offset: 2 })).toEqual(["payment.capture", "order.refund"]);
+    expect(await summaries({ limit: 2, offset: 4, order: "asc" })).toEqual([
+      "shipment.create",
+      "user.login",
+    ]);
+    const last = await audit.query({ limit: 2, offset: 4 });
+    expect(last.entries.map((e) => e.action)).toEqual(["post.update", "post.create"]);
+    expect(last.nextCursor).toBeNull();
+    expect(await summaries({ limit: 2, offset: 6 })).toEqual([]);
+  });
+
+  test("rejects a bad offset, or one with a cursor", async () => {
+    const { nextCursor } = await audit.query({ limit: 2 });
+    for (const offset of [-1, 1.5, 100_001]) {
+      await expect(audit.query({ offset })).rejects.toThrow(/offset must be an integer/);
+    }
+    await expect(audit.query({ offset: 2, cursor: nextCursor })).rejects.toThrow(
+      /offset or cursor, not both/,
+    );
+  });
+
   test("works with the table in another schema", async () => {
     const alt = createAuditLog({ db: own.db, table: altAuditLog, actions: ACTIONS });
     await alt.record(event());

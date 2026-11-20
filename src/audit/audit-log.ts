@@ -40,6 +40,7 @@ export interface AuditLogOptions<TAction extends string, TEntity extends string>
 
 const MAX_BATCH = 1_000;
 const MAX_LIMIT = 1_000;
+const MAX_OFFSET = 100_000;
 const PRUNE_BATCH = 5_000;
 
 interface Row {
@@ -312,6 +313,16 @@ export function createAuditLog<const TAction extends string, const TEntity exten
           `limit must be an integer from 1 to ${MAX_LIMIT}.`,
         );
       }
+      const offset = query.offset ?? 0;
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_OFFSET) {
+        throw new GroundworkError(
+          "invalid_argument",
+          `offset must be an integer from 0 to ${MAX_OFFSET.toLocaleString("en-US")}. Page further with cursors.`,
+        );
+      }
+      if (offset > 0 && query.cursor !== undefined && query.cursor !== null) {
+        throw new GroundworkError("invalid_argument", "Pass offset or cursor, not both.");
+      }
       if (query.cursor !== undefined && query.cursor !== null) {
         const position = decodeCursor(query.cursor);
         if (position.order !== order) {
@@ -331,7 +342,7 @@ export function createAuditLog<const TAction extends string, const TEntity exten
       // sort ids as text ("99" after "100"), disagreeing with the numeric cursor comparison.
       const rows = rowsOf<Row>(
         await db.execute(
-          sql`select ${SELECT} from ${table} ${whereClause(conditions)} order by ${table.occurredAt} ${direction}, ${table.id} ${direction} limit ${limit + 1}`,
+          sql`select ${SELECT} from ${table} ${whereClause(conditions)} order by ${table.occurredAt} ${direction}, ${table.id} ${direction} limit ${limit + 1} offset ${offset}`,
         ),
       );
       const page = rows.slice(0, limit);
