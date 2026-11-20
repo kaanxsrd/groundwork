@@ -31,8 +31,9 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1 or newer.
-      - run: npm install -g npm@latest
+      # Trusted publishing needs npm 11.5.1 or newer. Pinned to a major, so a new npm release
+      # can't change the publish environment unannounced.
+      - run: npm install -g npm@11
       - run: bun install --frozen-lockfile
 
       - name: Tag matches the version, and nothing is left unreleased
