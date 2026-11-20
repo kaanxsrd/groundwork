@@ -1,5 +1,5 @@
 import { type Clock, systemClock } from "../internal/clock.ts";
-import { deriveSubkey, type Secret } from "../internal/crypto.ts";
+import { lazySubkey, type SecretSource } from "../internal/crypto.ts";
 import type { GroundworkDatabase } from "../internal/db.ts";
 import { type Duration, parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
@@ -35,8 +35,11 @@ export const STORE_RETRY_MS = 5_000;
 const OUTAGE_LOG_KEY = "store-down";
 
 interface CommonOptions {
-  /** The app secret. Subjects are stored as HMACs keyed by a subkey derived from it. */
-  readonly secret: Secret;
+  /**
+   * The app secret, or a function that returns it on first use. Subjects are stored as HMACs keyed
+   * by a subkey derived from it. `cleanup()` never needs it.
+   */
+  readonly secret: SecretSource;
   /** What rules do when the store fails or times out. Defaults to `"memory"`. */
   readonly onError?: OnError | undefined;
   /**
@@ -111,7 +114,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   if (typeof options !== "object" || options === null) {
     throw new GroundworkError("invalid_config", "createRateLimiter needs an options object.");
   }
-  const subkey = deriveSubkey(options.secret, "rate-limit");
+  const subkey = lazySubkey(options.secret, "rate-limit");
   const defaultOnError = validateOnError(options.onError, "onError") ?? "memory";
   const timeoutMs =
     options.timeout === false
@@ -199,7 +202,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
       name: rule.name,
       algorithm: rule.algorithm,
       async check(subject: string, checkOptions?: CheckOptions): Promise<RateLimitResult> {
-        const key = storageKey(subkey, rule.algorithm, rule.name, validateSubject(subject));
+        const key = storageKey(subkey(), rule.algorithm, rule.name, validateSubject(subject));
         const cost = validateCost(checkOptions?.cost ?? 1);
         const now = clock ? clock.now().getTime() : null;
 
@@ -220,7 +223,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
         return resultFor(rule, state, cost);
       },
       async reset(subject: string, resetOptions?: ResetOptions): Promise<void> {
-        const key = storageKey(subkey, rule.algorithm, rule.name, validateSubject(subject));
+        const key = storageKey(subkey(), rule.algorithm, rule.name, validateSubject(subject));
         if (resetOptions?.tx !== undefined && store.kind !== "postgres") {
           throw new GroundworkError(
             "invalid_argument",

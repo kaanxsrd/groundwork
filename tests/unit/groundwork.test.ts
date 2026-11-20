@@ -49,3 +49,34 @@ describe("createGroundwork", () => {
     expect((await rule.check("x")).allowed).toBe(true);
   });
 });
+
+describe("a secret function", () => {
+  test("is called on first use, once, not at startup", async () => {
+    let calls = 0;
+    const gw = createGroundwork({
+      db,
+      tables: {},
+      secret: () => {
+        calls++;
+        return TEST_SECRET;
+      },
+      rateLimit: { store: memoryStore() },
+    });
+    const rule = gw.rateLimit.rule({ name: "r", limit: 5, window: "1m" });
+    expect(calls).toBe(0);
+    await rule.check("x");
+    await rule.check("x");
+    expect(calls).toBe(1);
+  });
+
+  test("that returns a short secret fails on first use", async () => {
+    const gw = createGroundwork({
+      db,
+      tables: {},
+      secret: () => "short",
+      rateLimit: { store: memoryStore() },
+    });
+    const rule = gw.rateLimit.rule({ name: "r", limit: 5, window: "1m" });
+    await expect(rule.check("x")).rejects.toThrow(/at least 32 bytes/);
+  });
+});

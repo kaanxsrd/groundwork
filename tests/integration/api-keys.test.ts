@@ -565,6 +565,20 @@ describe("keys from an older system", () => {
 });
 
 describe("configuration", () => {
+  test("a secret function hashes keys as the secret itself does", async () => {
+    const plain = setup().keys;
+    const lazy = createApiKeys({
+      db: database.current.db,
+      table: apiKeys,
+      secret: () => TEST_SECRET,
+      namespace: "tst",
+      scopes: SCOPES,
+      defaultRateLimit: null,
+    });
+    const { key } = await lazy.create({ name: "Lazy", scopes: ["posts:read"] });
+    expect((await plain.verify(bearer(key))).ok).toBe(true);
+  });
+
   test("the default per-key limit needs a rate limiter, unless it is turned off", () => {
     const base = { db: database.current.db, secret: TEST_SECRET } as const;
     const noLimiter = createGroundwork({

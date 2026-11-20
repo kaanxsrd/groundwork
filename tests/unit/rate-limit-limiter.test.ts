@@ -197,3 +197,26 @@ describe("createRateLimiter options", () => {
     expect([a, b]).toHaveLength(2);
   });
 });
+
+describe("a secret function", () => {
+  test("cleanup never calls it", async () => {
+    const limiter = createRateLimiter({
+      store: memoryStore(),
+      secret: () => {
+        throw new Error("GROUNDWORK_SECRET is not set");
+      },
+    });
+    expect(await limiter.cleanup()).toBe(0);
+    const rule = limiter.rule({ name: "r", limit: 1, window: "1m" });
+    await expect(rule.check("x")).rejects.toThrow(/GROUNDWORK_SECRET is not set/);
+  });
+
+  test("stores the same keys as the secret itself", async () => {
+    const store = memoryStore();
+    const options = { name: "r", limit: 2, window: "1m" } as const;
+    const plain = createRateLimiter({ store, secret: TEST_SECRET }).rule(options);
+    const lazy = createRateLimiter({ store, secret: () => TEST_SECRET }).rule(options);
+    expect((await plain.check("x")).remaining).toBe(1);
+    expect((await lazy.check("x")).remaining).toBe(0);
+  });
+});

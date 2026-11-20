@@ -146,7 +146,8 @@ describe("stored responses", () => {
 });
 
 describe("key hashing", () => {
-  const hasher = createKeyHasher(deriveSubkey(SECRET, "idempotency"));
+  const subkey = deriveSubkey(SECRET, "idempotency");
+  const hasher = createKeyHasher(() => subkey);
 
   test("never changes (it is part of the storage format)", () => {
     expect(hasher.storageKey("http", "apikey:42", "order-2026-11-19-0001")).toBe(
@@ -183,7 +184,8 @@ describe("key hashing", () => {
   });
 
   test("uses a key derived from the secret, so another secret gives other hashes", () => {
-    const other = createKeyHasher(deriveSubkey(`${SECRET}-other`, "idempotency"));
+    const otherKey = deriveSubkey(`${SECRET}-other`, "idempotency");
+    const other = createKeyHasher(() => otherKey);
     expect(other.storageKey("http", "s", "k")).not.toBe(hasher.storageKey("http", "s", "k"));
   });
 });

@@ -9,6 +9,13 @@ import { GroundworkError } from "./errors.ts";
 /** The app secret, as a string (UTF-8) or raw bytes. It must be at least {@link MIN_SECRET_BYTES} long. */
 export type Secret = string | Uint8Array;
 
+/**
+ * The secret, or a function that returns it. A function is called on first use (the first check,
+ * key hash or idempotency claim), so code that only cleans up, prunes or runs jobs never needs
+ * it, and the environment can be read after `next build`.
+ */
+export type SecretSource = Secret | (() => Secret);
+
 /** What a derived subkey is used for. Each module gets its own key, so one can never stand in for another. */
 export type KeyPurpose = "rate-limit" | "api-keys" | "idempotency";
 
@@ -47,6 +54,27 @@ export function deriveSubkey(secret: Secret, purpose: KeyPurpose): Buffer {
   return Buffer.from(
     hkdfSync("sha256", secretBytes(secret), HKDF_SALT, hkdfInfo(purpose), SUBKEY_BYTES),
   );
+}
+
+/**
+ * The subkey for one purpose, derived once. A plain secret is checked and derived now; a
+ * function is called, checked and derived on the first call, so a bad secret fails then.
+ */
+export function lazySubkey(source: SecretSource, purpose: KeyPurpose): () => Buffer {
+  if (typeof source !== "function") {
+    const key = deriveSubkey(source, purpose);
+    return () => key;
+  }
+  let key: Buffer | undefined;
+  return () => {
+    key ??= deriveSubkey(source(), purpose);
+    return key;
+  };
+}
+
+/** Throws now for a plain secret that's too short; a function is checked on first use. */
+export function checkSecretSource(source: SecretSource): void {
+  if (typeof source !== "function") secretBytes(source);
 }
 
 /** Derives every subkey once, so hot paths never repeat the HKDF work. */

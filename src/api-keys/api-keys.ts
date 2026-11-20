@@ -3,7 +3,7 @@ import { toJsonObject } from "../audit/json.ts";
 import type { AuditActor } from "../audit/types.ts";
 import { ipInBlocks } from "../internal/cidr.ts";
 import type { Clock } from "../internal/clock.ts";
-import { deriveSubkey, type Secret, timingSafeEqual } from "../internal/crypto.ts";
+import { lazySubkey, type SecretSource, timingSafeEqual } from "../internal/crypto.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
@@ -47,8 +47,11 @@ export interface ApiKeysOptions<TScopes extends Record<string, string>> {
   readonly db: GroundworkDatabase;
   /** The `apiKeys` table from `groundworkTables()`. */
   readonly table: ApiKeysTable;
-  /** The app secret. Keys are stored as HMACs under a subkey derived from it. */
-  readonly secret: Secret;
+  /**
+   * The app secret, or a function that returns it on first use. Keys are stored as HMACs under a
+   * subkey derived from it.
+   */
+  readonly secret: SecretSource;
   /** The start of every key, such as `"vnt"` for `vnt_…`. Pick something unique to your app. */
   readonly namespace: string;
   /** Every scope your API knows, with a description: `{ "posts:read": "Read posts" }`. */
@@ -180,7 +183,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
   const namespace = validateNamespace(options.namespace);
   const scopeRules = createScopeRules(options.scopes);
   const checksum = options.checksum ?? true;
-  const subkey = deriveSubkey(options.secret, "api-keys");
+  const subkey = lazySubkey(options.secret, "api-keys");
   const logger = createOnceLogger(options.logger ?? consoleLogger);
   const waitUntil =
     options.waitUntil ??
@@ -504,7 +507,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
             target,
             mutation(sql`changed as (
               insert into ${table} as k (name, description, prefix, key_hash, scopes, owner_id, rate_limit, rate_limit_window, daily_quota, allowed_ips, allowed_origins, metadata, expires_at, created_by, created_at, updated_at)
-              select ${values.name}, ${values.description ?? sql`null::text`}, ${generated.prefix}::text, ${hashKey(subkey, generated.body)}::text,
+              select ${values.name}, ${values.description ?? sql`null::text`}, ${generated.prefix}::text, ${hashKey(subkey(), generated.body)}::text,
                 ${values.scopes}, ${values.owner_id ?? sql`null::text`}, ${values.rate_limit}, ${values.rate_limit_window},
                 ${values.daily_quota ?? sql`null::int`}, ${values.allowed_ips ?? sql`'{}'::text[]`}, ${values.allowed_origins ?? sql`'{}'::text[]`},
                 ${values.metadata ?? sql`null::jsonb`}, ${expires}, ${actorName(actor)}::text, input.now, input.now
@@ -625,7 +628,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
         rotateOptions.tx ?? db,
         mutation(sql`changed as (
           update ${table} as k set
-            key_hash = ${hashKey(subkey, generated.body)}::text,
+            key_hash = ${hashKey(subkey(), generated.body)}::text,
             prefix = ${generated.prefix}::text,
             previous_key_hash = case when ${graceMs}::float8 > 0 then k.key_hash else null end,
             previous_key_expires_at = case when ${graceMs}::float8 > 0 then input.now + ${graceMs}::float8 * interval '1 millisecond' else null end,
@@ -755,7 +758,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
         extra: { missingScopes?: TScope[]; limit?: RateLimitResult } = {},
       ) => fail(reason, key, { ...extra, prefix: presented });
 
-      const hash = hashKey(subkey, parsed.body);
+      const hash = hashKey(subkey(), parsed.body);
       const legacy = legacyHash ? legacyHash(parsed.body) : null;
       if (legacy !== null && typeof legacy !== "string") {
         throw new GroundworkError("invalid_config", "legacyHash must return a string.");

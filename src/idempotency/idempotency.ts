@@ -1,6 +1,6 @@
 import { type SQL, sql } from "drizzle-orm";
 import type { Clock } from "../internal/clock.ts";
-import { deriveSubkey, randomHex, type Secret, timingSafeEqual } from "../internal/crypto.ts";
+import { lazySubkey, randomHex, type SecretSource, timingSafeEqual } from "../internal/crypto.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
@@ -22,8 +22,11 @@ export interface IdempotencyOptions {
   readonly db: GroundworkDatabase;
   /** `idempotencyKeys` from `groundworkTables()`. */
   readonly table: IdempotencyKeysTable;
-  /** The app secret. Keys and fingerprints are stored as HMACs with a subkey derived from it. */
-  readonly secret: Secret;
+  /**
+   * The app secret, or a function that returns it on first use. Keys and fingerprints are stored
+   * as HMACs with a subkey derived from it. `cleanup()` never needs it.
+   */
+  readonly secret: SecretSource;
   /** How long a completed result is replayed. Defaults to `"24h"`, as Stripe and VaultDrop do. */
   readonly ttl?: Duration | undefined;
   /**
@@ -90,7 +93,7 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
     IDEMPOTENCY_KEY_COLUMNS,
     "idempotency-key table from groundworkTables()",
   );
-  const subkey = deriveSubkey(options.secret, "idempotency");
+  const subkey = lazySubkey(options.secret, "idempotency");
   const defaultTtlMs = parseDuration(options.ttl ?? "24h", { label: "ttl", minMs: 1_000 });
   const leaseMs = parseDuration(options.lease ?? "30s", { label: "lease", minMs: 1_000 });
   const logger = options.logger ?? consoleLogger;

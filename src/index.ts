@@ -34,7 +34,7 @@ import type { AuditLog } from "./audit/types.ts";
 import { createIdempotency } from "./idempotency/idempotency.ts";
 import type { Idempotency } from "./idempotency/types.ts";
 import type { Clock } from "./internal/clock.ts";
-import { deriveSubkeys, type Secret } from "./internal/crypto.ts";
+import { checkSecretSource, type SecretSource } from "./internal/crypto.ts";
 import type { GroundworkDatabase } from "./internal/db.ts";
 import type { Duration } from "./internal/duration.ts";
 import { GroundworkError } from "./internal/errors.ts";
@@ -50,7 +50,7 @@ import type { JobSchedulesTable, JobsTable } from "./schema/jobs.ts";
 import type { RateLimitsTable } from "./schema/rate-limits.ts";
 
 export type { Clock } from "./internal/clock.ts";
-export type { Secret } from "./internal/crypto.ts";
+export type { Secret, SecretSource } from "./internal/crypto.ts";
 export type { GroundworkDatabase } from "./internal/db.ts";
 export type { Duration, DurationUnit } from "./internal/duration.ts";
 export { GroundworkError, type GroundworkErrorCode, isGroundworkError } from "./internal/errors.ts";
@@ -75,8 +75,15 @@ export interface GroundworkOptions<
     readonly jobSchedules?: JobSchedulesTable | undefined;
     readonly idempotencyKeys?: IdempotencyKeysTable | undefined;
   };
-  /** At least 32 bytes. Changing it invalidates every API key and resets every rate limit. */
-  readonly secret: Secret;
+  /**
+   * At least 32 bytes. Changing it invalidates every API key and resets every rate limit. Reusing
+   * a secret the app already has (such as `BETTER_AUTH_SECRET`) is safe: groundwork only uses keys
+   * derived from it with HKDF, never the secret itself.
+   *
+   * Pass a function to read it on first use instead, for example when the environment isn't set
+   * during `next build`, or in a worker that only runs jobs: `secret: () => env.GROUNDWORK_SECRET`.
+   */
+  readonly secret: SecretSource;
   /** Defaults to `console` (warnings and errors only). */
   readonly logger?: Logger | undefined;
   /** Defaults to each store's own clock. Inject one in tests. */
@@ -187,8 +194,8 @@ export function createGroundwork<
       'tables is required: import * as tables from "./your/groundwork/schema".',
     );
   }
-  // Fail at startup, not on the first request.
-  deriveSubkeys(secret);
+  // A plain secret fails at startup, not on the first request; a function fails on first use.
+  checkSecretSource(secret);
 
   const shared = {
     secret,

@@ -11,11 +11,12 @@ export interface KeyHasher {
   fingerprint(parts: readonly (string | Uint8Array)[]): string;
 }
 
-export function createKeyHasher(subkey: Uint8Array): KeyHasher {
+/** `subkey` is read on each use, so a lazily resolved secret is resolved on the first claim. */
+export function createKeyHasher(subkey: () => Uint8Array): KeyHasher {
   return {
     storageKey: (kind, scope, key) =>
-      hmacSha256Parts(subkey, [kind, scope, key]).toString("base64url"),
+      hmacSha256Parts(subkey(), [kind, scope, key]).toString("base64url"),
     fingerprint: (parts) =>
-      hmacSha256Parts(subkey, ["fingerprint", ...parts]).toString("base64url"),
+      hmacSha256Parts(subkey(), ["fingerprint", ...parts]).toString("base64url"),
   };
 }
