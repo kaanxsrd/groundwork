@@ -372,7 +372,7 @@ Don't start the next phase until I approve.
 ### Phase 6: Docs + 0.1 release
 - [x] README in the same style as my other repos (banner, badges, quickstart, a short section per module, a comparison table with honest trade-offs)
 - [x] `docs/` with one page per module, plus migration notes for moving from hand-rolled tables
-- [ ] Publish `0.1.0` with provenance *(ready: versioned, release workflow and docs/releasing.md in place; the first release is published by hand once the owner logs npm in)*
+- [x] Publish `0.1.0` with provenance *(published 2026-11-20 as `@vantedev/groundwork`, by hand and so without provenance; later releases get provenance through trusted publishing)*
 
 ### Phase 7: Dogfooding, then 1.0
 - [ ] Faultline: swap the in-memory limiter (this fixes the multi-instance problem)
@@ -652,6 +652,8 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
 - 2026-11-20: The npm org `vante` couldn't be created, so the package is **`@vantedev/groundwork`**, under the owner's npm user `vantedev`, which also publishes `vaultdrop` and `hookline-cli`. A user scope needs no organization. 0.1.0 was never published, so the rename breaks nothing; this supersedes `@vante/groundwork` above.
 - 2026-11-20: The first release is published by hand from a clean checkout, as VaultDrop's CLI was, so 0.1.0 has no provenance; trusted publishing gives every later release provenance. The release workflow now skips publishing when the tagged version is already on npm, so tagging `v0.1.0` afterwards only runs the checks.
 - 2026-11-20: At the owner's request, every commit message was rewritten to Conventional Commits, without "Phase" wording or co-author trailers. The GitHub repository was then deleted and recreated, so its cached contributor list starts fresh. Claude Code files (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `PROMPT.md`) are ignored by git.
+- 2026-11-20: Published `@vantedev/groundwork@0.1.0` by hand, confirmed with 2FA in the browser. Its shasum (`7b638162…`) matches the tarball built and dry-run from `180427c`, and installing it from npm into an empty project loads all 9 subpaths on Node 22. While npm processed the new package, it showed a placeholder version `0.0.0-stage` ("Temporary package placeholder for staged publishing"); `latest` then moved to 0.1.0. `v0.1.0` is tagged on `180427c`.
+- 2026-11-20: The release workflow's run for `v0.1.0` failed in the smoke test before the (skipped) publish step: `npm@latest` is now npm 12, whose `npm pack --json` prints an object keyed by package name instead of an array. The smoke and example scripts now read both shapes (tested under npm 12 and Node 22's npm), and the workflow pins `npm@11`, which still has trusted publishing. The `v0.1.0` run stays red; the tag isn't moved.
 
 ## 11. Alternatives check (2026-11-19)
 
