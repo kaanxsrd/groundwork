@@ -54,7 +54,12 @@ export type { Secret, SecretSource } from "./internal/crypto.ts";
 export type { GroundworkDatabase } from "./internal/db.ts";
 export type { Duration, DurationUnit } from "./internal/duration.ts";
 export { GroundworkError, type GroundworkErrorCode, isGroundworkError } from "./internal/errors.ts";
-export type { LogContext, Logger } from "./internal/logger.ts";
+export {
+  type ContextFirstLogger,
+  type LogContext,
+  type Logger,
+  pinoLogger,
+} from "./internal/logger.ts";
 
 export interface GroundworkOptions<
   TAuditAction extends string = never,

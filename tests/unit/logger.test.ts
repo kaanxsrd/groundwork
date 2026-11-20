@@ -4,6 +4,7 @@ import {
   createOnceLogger,
   type LogContext,
   type Logger,
+  pinoLogger,
 } from "../../src/internal/logger.ts";
 
 function recordingLogger(): Logger & { lines: [string, string, LogContext | undefined][] } {
@@ -57,6 +58,41 @@ describe("createOnceLogger", () => {
   test("skips levels the logger does not implement", () => {
     const once = createOnceLogger({ warn: () => {}, error: () => {} });
     expect(() => once.once("debug", "k", "dropped")).not.toThrow();
+  });
+});
+
+describe("pinoLogger", () => {
+  /** pino-shaped: context first, and methods that need `this`. */
+  class ContextFirst {
+    lines: [string, object, string][] = [];
+    warn(context: object, message: string) {
+      this.lines.push(["warn", context, message]);
+    }
+    error(context: object, message: string) {
+      this.lines.push(["error", context, message]);
+    }
+    info(context: object, message: string) {
+      this.lines.push(["info", context, message]);
+    }
+  }
+
+  test("swaps the arguments and keeps the logger as this", () => {
+    const pino = new ContextFirst();
+    const logger = pinoLogger(pino);
+    logger.warn("store down", { store: "redis" });
+    logger.error("failed");
+    logger.info?.("back", { store: "redis" });
+    expect(pino.lines).toEqual([
+      ["warn", { store: "redis" }, "store down"],
+      ["error", {}, "failed"],
+      ["info", { store: "redis" }, "back"],
+    ]);
+  });
+
+  test("leaves out levels the logger doesn't have", () => {
+    const logger = pinoLogger(new ContextFirst());
+    expect(logger.info).toBeFunction();
+    expect(logger.debug).toBeUndefined();
   });
 });
 

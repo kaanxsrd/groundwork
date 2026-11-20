@@ -73,13 +73,13 @@ import type { Logger } from "@vantedev/groundwork";
 const logger: Logger = console; // works as is
 ```
 
-pino takes the context first, so swap the arguments:
+pino takes the context first. Wrap it in `pinoLogger`, which swaps the arguments (it works for any logger whose methods take `(context, message)`):
 
 ```ts
-const logger: Logger = {
-  warn: (message, context) => pino.warn(context, message),
-  error: (message, context) => pino.error(context, message),
-};
+import { createGroundwork, pinoLogger } from "@vantedev/groundwork";
+import { logger } from "./logger"; // your pino instance
+
+const gw = createGroundwork({ db, tables, secret, logger: pinoLogger(logger) });
 ```
 
 By default warnings and errors go to the console with a `[groundwork]` prefix. Log context never contains secrets, raw keys or raw subjects.

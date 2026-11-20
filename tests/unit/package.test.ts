@@ -63,7 +63,7 @@ describe("package.json", () => {
   test("each entry point exports exactly its public runtime API", async () => {
     // Types are checked by the smoke test; this pins the values, so an accidental export shows up.
     const expected: Record<string, string[]> = {
-      ".": ["GroundworkError", "createGroundwork", "isGroundworkError"],
+      ".": ["GroundworkError", "createGroundwork", "isGroundworkError", "pinoLogger"],
       "./schema": ["DEFAULT_PREFIX", "groundworkTables"],
       "./rate-limit": ["createRateLimiter", "memoryStore", "redisStore"],
       "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
