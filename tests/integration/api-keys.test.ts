@@ -253,6 +253,8 @@ describe("verify: every reason", () => {
     });
     const first = await keys.verify(bearer(key));
     expect(first.ok && first.headers.RateLimit).toBe('"tst:key";r=1;t=60');
+    // The numbers behind the headers, for apps that send their own.
+    expect(first).toMatchObject({ ok: true, rateLimit: { limit: 2, remaining: 1 }, quota: null });
     expect((await keys.verify(bearer(key))).ok).toBe(true);
     const limited = await keys.verify(bearer(key));
     expect(limited).toMatchObject({
@@ -262,6 +264,8 @@ describe("verify: every reason", () => {
       key: { id: record.id },
     });
     if (limited.ok) throw new Error("expected a failure");
+    expect(limited.rateLimit).toMatchObject({ allowed: false, limit: 2, remaining: 0 });
+    expect(limited.quota).toBeUndefined();
     expect(limited.headers["Retry-After"]).toBe("60");
     expect(limited.response.headers.get("retry-after")).toBe("60");
     expect((await keys.verify(bearer(other.key))).ok).toBe(true); // its own counter
@@ -285,10 +289,15 @@ describe("verify: every reason", () => {
       rateLimit: null,
       dailyQuota: 3,
     });
-    for (let i = 0; i < 3; i++) expect((await keys.verify(bearer(key))).ok).toBe(true);
+    const first = await keys.verify(bearer(key));
+    expect(first).toMatchObject({ ok: true, rateLimit: null, quota: { limit: 3, remaining: 2 } });
+    for (let i = 0; i < 2; i++) expect((await keys.verify(bearer(key))).ok).toBe(true);
     const over = await keys.verify(bearer(key));
     expect(over).toMatchObject({ ok: false, reason: "quota_exceeded", status: 429 });
-    if (!over.ok) expect(over.headers["Retry-After"]).toBe("86400");
+    if (over.ok) throw new Error("expected a failure");
+    expect(over.headers["Retry-After"]).toBe("86400");
+    expect(over.quota).toMatchObject({ allowed: false, limit: 3, remaining: 0 });
+    expect(over.rateLimit).toBeUndefined();
     clock.advance("1d");
     expect((await keys.verify(bearer(key))).ok).toBe(true);
   });

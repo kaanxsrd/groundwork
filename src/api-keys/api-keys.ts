@@ -413,10 +413,16 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
   function fail(
     reason: VerifyFailureReason,
     key: ApiKeyRecord<TScope> | null = null,
-    extra: { missingScopes?: TScope[]; limit?: RateLimitResult; prefix?: string } = {},
+    extra: {
+      missingScopes?: TScope[];
+      rateLimit?: RateLimitResult;
+      quota?: RateLimitResult;
+      prefix?: string;
+    } = {},
   ): VerifyResult<TScope> {
     const missingScopes = extra.missingScopes ?? [];
-    const headers = failureHeaders(reason, missingScopes, extra.limit?.headers ?? {});
+    const denying = extra.quota ?? extra.rateLimit;
+    const headers = failureHeaders(reason, missingScopes, denying?.headers ?? {});
     return {
       ok: false,
       reason,
@@ -425,6 +431,8 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       key,
       prefix: extra.prefix ?? null,
       ...(missingScopes.length > 0 ? { missingScopes } : {}),
+      ...(extra.rateLimit ? { rateLimit: extra.rateLimit } : {}),
+      ...(extra.quota ? { quota: extra.quota } : {}),
       headers,
       response: failureResponse(reason, headers, missingScopes),
     };
@@ -755,7 +763,11 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       const denied = (
         reason: VerifyFailureReason,
         key: ApiKeyRecord<TScope> | null = null,
-        extra: { missingScopes?: TScope[]; limit?: RateLimitResult } = {},
+        extra: {
+          missingScopes?: TScope[];
+          rateLimit?: RateLimitResult;
+          quota?: RateLimitResult;
+        } = {},
       ) => fail(reason, key, { ...extra, prefix: presented });
 
       const hash = hashKey(subkey(), parsed.body);
@@ -823,22 +835,22 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       const missingScopes = scopeRules.missing(key.scopes, required) as TScope[];
       if (missingScopes.length > 0) return denied("forbidden_scope", key, { missingScopes });
 
-      let headers: Readonly<Record<string, string>> = {};
+      let rateLimit: RateLimitResult | null = null;
       if (key.rateLimit) {
-        const limit = await ruleFor("rate", key.rateLimit.limit, key.rateLimit.window).check(
-          key.id,
-        );
-        if (!limit.allowed) return denied("rate_limited", key, { limit });
-        headers = limit.headers;
+        rateLimit = await ruleFor("rate", key.rateLimit.limit, key.rateLimit.window).check(key.id);
+        if (!rateLimit.allowed) return denied("rate_limited", key, { rateLimit });
       }
+      let quota: RateLimitResult | null = null;
       if (key.dailyQuota !== null) {
-        const quota = await ruleFor("quota", key.dailyQuota, "1d").check(key.id);
-        if (!quota.allowed) return denied("quota_exceeded", key, { limit: quota });
+        quota = await ruleFor("quota", key.dailyQuota, "1d").check(key.id);
+        if (!quota.allowed) {
+          return denied("quota_exceeded", key, rateLimit ? { rateLimit, quota } : { quota });
+        }
       }
 
       const legacyMatch = current && legacy !== null && timingSafeEqual(row.key_hash, legacy);
       touch(stored, at, ip, legacyMatch ? { from: legacy, to: hash } : null);
-      return { ok: true, key, headers };
+      return { ok: true, key, headers: rateLimit?.headers ?? {}, rateLimit, quota };
     },
 
     redactKeys: (text) => redactKeys(text, namespace),

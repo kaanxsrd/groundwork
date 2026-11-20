@@ -1,6 +1,7 @@
 import type { AuditActor } from "../audit/types.ts";
 import type { GroundworkDatabase } from "../internal/db.ts";
 import type { Duration } from "../internal/duration.ts";
+import type { RateLimitResult } from "../rate-limit/types.ts";
 import type { GrantedScope } from "./scopes.ts";
 
 export type ApiKeyStatus = "active" | "suspended" | "expired" | "revoked";
@@ -131,6 +132,10 @@ export type VerifyResult<TScope extends string = string> =
       readonly key: ApiKeyRecord<TScope>;
       /** Rate-limit headers for the response, when the key has a limit. */
       readonly headers: Readonly<Record<string, string>>;
+      /** The per-key limit's check (limit, remaining, reset), or `null` when the key has none. */
+      readonly rateLimit: RateLimitResult | null;
+      /** The daily quota's check, or `null` when the key has none. */
+      readonly quota: RateLimitResult | null;
     }
   | {
       readonly ok: false;
@@ -143,6 +148,10 @@ export type VerifyResult<TScope extends string = string> =
       readonly prefix: string | null;
       /** For `forbidden_scope`: what was missing. */
       readonly missingScopes?: readonly TScope[] | undefined;
+      /** For `rate_limited` and `quota_exceeded`: the per-key limit's check. */
+      readonly rateLimit?: RateLimitResult | undefined;
+      /** For `quota_exceeded`: the daily quota's check. */
+      readonly quota?: RateLimitResult | undefined;
       readonly headers: Readonly<Record<string, string>>;
       /** A ready JSON response: `{ "error": { "code", "message" } }` with the right headers. */
       readonly response: Response;

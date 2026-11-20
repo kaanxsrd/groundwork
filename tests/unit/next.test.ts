@@ -102,7 +102,13 @@ function fakeApiKeys(ok: boolean) {
     async verify(_input: unknown, options?: VerifyOptions<Scope>) {
       calls.push({ scopes: options?.scopes, ip: options?.ip });
       if (ok) {
-        return { ok: true, key: fakeKey(), headers: { RateLimit: '"api";r=59;t=60' } };
+        return {
+          ok: true,
+          key: fakeKey(),
+          headers: { RateLimit: '"api";r=59;t=60' },
+          rateLimit: null,
+          quota: null,
+        };
       }
       return {
         ok: false,

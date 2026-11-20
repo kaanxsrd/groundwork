@@ -98,7 +98,7 @@ On failure the result has `reason`, `status`, `message`, `headers`, the `key` wh
 { "error": { "code": "forbidden_scope", "message": "This API key does not have the scopes this request needs.", "missingScopes": ["posts:write"] } }
 ```
 
-401s carry `WWW-Authenticate: Bearer error="invalid_token"` (or just `Bearer` when no key was sent). A scope failure carries `Bearer error="insufficient_scope", scope="…"`, as RFC 6750 describes. 429s carry `Retry-After` and the `RateLimit` headers. On success, `auth.headers` holds the key's `RateLimit` headers for your response.
+401s carry `WWW-Authenticate: Bearer error="invalid_token"` (or just `Bearer` when no key was sent). A scope failure carries `Bearer error="insufficient_scope", scope="…"`, as RFC 6750 describes. 429s carry `Retry-After` and the `RateLimit` headers. On success, `auth.headers` holds the key's `RateLimit` headers for your response, and `auth.rateLimit` and `auth.quota` hold the checks themselves (`limit`, `remaining`, `resetAt`), or `null` when the key has no limit or quota. A `rate_limited` or `quota_exceeded` failure carries the same fields, for apps that send their own headers.
 
 **Allowlists:**
 
