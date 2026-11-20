@@ -36,6 +36,16 @@ openssl rand -base64 32
 
 groundwork never uses it directly. It derives a separate 256-bit key for each purpose with HKDF-SHA256, so a key derived for rate limiting can never be used to forge an API key hash. The secret can be a string (its UTF-8 bytes count) or a `Uint8Array`.
 
+Because only derived keys are used, reusing a secret your app already has, such as `BETTER_AUTH_SECRET`, is safe: nothing groundwork stores or sends can reveal it or be used against the other system.
+
+The secret can also be a function, called once, on first use (the first rate-limit check, key hash or idempotency claim):
+
+```ts
+const gw = createGroundwork({ db, tables, secret: () => env().GROUNDWORK_SECRET });
+```
+
+That lets you create `gw` at module scope when the environment isn't set during `next build`, and run a worker that only cleans up or runs jobs without the secret at all. A plain secret that's too short fails at startup; a function that returns one fails on first use.
+
 > [!IMPORTANT]
 > Stored API key hashes are derived from this secret. **Changing the secret invalidates every API key** and resets every rate limit. Keep it stable, keep it out of source control, and back it up with your database credentials. Support for rotating to a new secret (`previousSecrets`) is planned.
 

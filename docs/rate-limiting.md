@@ -12,7 +12,7 @@ Fixed-window and token-bucket rate limits stored in your Postgres, checked in on
    export const { rateLimits } = groundworkTables();
    ```
 
-2. Create a limiter and define rules once, at module scope:
+2. Create a limiter and define rules, usually at module scope:
 
    ```ts
    // src/lib/rate-limits.ts
@@ -58,6 +58,17 @@ gw.rateLimit.rule({ name: "api", algorithm: "token-bucket", rate: 10, per: "1s",
 ```
 
 Durations are [strings with a unit](core-concepts.md#durations). `limit`, `rate` and `burst` are positive integers. A rule's `name` may use letters, digits and `_ . : / -`, because it goes into a response header.
+
+### Limits that vary per request
+
+Defining a rule is cheap: it checks the options and returns two functions, with no I/O. When the limit depends on the request, such as a customer's plan, or an existing `rateLimit(key, { max, windowSeconds })` helper you're keeping, define the rule where you check it. There's no need to cache rules yourself:
+
+```ts
+const rule = gw.rateLimit.rule({ name: "api:plan", limit: plan.requestsPerMinute, window: "1m" });
+const result = await rule.check(apiKeyId);
+```
+
+Counters are keyed by the rule's algorithm, name and subject. Rules with the same name therefore share a counter: a key that changes plan keeps what it used in the current window, under the new limit. To count separately, put the limit in the name (`"export:5per1h"`).
 
 ## Checking
 

@@ -93,7 +93,10 @@ export interface RateLimitRule {
 }
 
 export interface RateLimiter {
-  /** Defines a rule. Rules are cheap; define them once at module scope. */
+  /**
+   * Defines a rule. It does no I/O, so a rule can be defined per request when its limit varies.
+   * Rules with the same algorithm and name share counters.
+   */
   rule(options: RuleOptions): RateLimitRule;
   /** Deletes expired rows. Run it every hour or so; returns how many rows it deleted. */
   cleanup(): Promise<number>;

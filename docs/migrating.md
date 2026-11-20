@@ -5,6 +5,16 @@ Most apps that need groundwork already have a `rate_limits`, `audit_log` or `job
 ## The approach
 
 1. **Add groundwork next to your tables.** Its tables are prefixed `gw_`, so `gw_rate_limits` sits beside your `rate_limits` and nothing collides. Export only the tables for the module you're moving, then run `drizzle-kit generate`. The migration should contain nothing but `CREATE TABLE` and `CREATE INDEX`; if it touches your own tables, stop and check your schema glob.
+
+   The table names in SQL don't collide, but the TypeScript exports can: if your schema already exports `rateLimits`, `auditLog` or `jobs` (Better Auth's `rateLimit` too, in a barrel that re-exports everything), rename groundwork's, and hand them to `createGroundwork` by its names instead of `import * as tables`:
+
+   ```ts
+   // src/db/schema/groundwork.ts
+   export const { rateLimits: gwRateLimits, auditLog: gwAuditLog } = groundworkTables();
+
+   // src/lib/groundwork.ts
+   createGroundwork({ db, tables: { rateLimits: gwRateLimits, auditLog: gwAuditLog }, secret });
+   ```
 2. **Switch the code, one module at a time.** Each module works on its own: you can move rate limiting today and the job queue next month.
 3. **Carry over the data that matters** with the SQL below. Some modules have nothing worth moving.
 4. **Drop the old table later**, in a separate migration, once nothing reads it.
