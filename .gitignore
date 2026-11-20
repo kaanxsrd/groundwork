@@ -18,3 +18,10 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/*
+
+# AI assistant files (Claude Code settings, memory, MCP config, prompts)
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.json
+/PROMPT.md
