@@ -60,9 +60,16 @@ const isUpstreamError = (line) =>
 mkdirSync(app, { recursive: true });
 
 let tarball = "";
+/** `npm pack --json` prints an array up to npm 11, and an object keyed by package name from 12. */
+function packedFilename(output) {
+  const parsed = JSON.parse(output);
+  const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+  if (typeof entry?.filename !== "string") throw new Error(`Unexpected npm pack output: ${output}`);
+  return entry.filename;
+}
+
 step("pack", () => {
-  const [packed] = JSON.parse(run(`npm pack --json --pack-destination "${work}"`, root));
-  tarball = join(work, packed.filename);
+  tarball = join(work, packedFilename(run(`npm pack --json --pack-destination "${work}"`, root)));
 });
 
 step(`install into a fresh project (TypeScript ${tsVersions.join(", ")})`, () => {

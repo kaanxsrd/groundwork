@@ -144,7 +144,9 @@ let tarball = "";
 async function pack() {
   await step("build and pack groundwork", () => {
     run("bun run build", root);
-    const [packed] = JSON.parse(run(`npm pack --json --pack-destination "${work}"`, root));
+    // `npm pack --json` prints an array up to npm 11, and an object keyed by package name from 12.
+    const output = JSON.parse(run(`npm pack --json --pack-destination "${work}"`, root));
+    const packed = Array.isArray(output) ? output[0] : Object.values(output)[0];
     tarball = join(work, packed.filename);
   });
 }
