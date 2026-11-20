@@ -121,6 +121,7 @@ function toRecord(row: StoredJob): JobRecord {
   return {
     id: row.id,
     type: row.type,
+    schedule: row.type.startsWith(SCHEDULE_PREFIX) ? row.type.slice(SCHEDULE_PREFIX.length) : null,
     status: row.status,
     payload: row.payload,
     priority: row.priority,
@@ -854,6 +855,10 @@ export function createJobs(options: JobsOptions): Jobs {
               sql`, `,
             )})`;
       if (filter.type !== undefined) conditions.push(inList("j.type", listOf(filter.type)));
+      if (filter.schedule !== undefined) {
+        const names = listOf(filter.schedule).map((name) => `${SCHEDULE_PREFIX}${name}`);
+        conditions.push(inList("j.type", names));
+      }
       if (filter.status !== undefined) conditions.push(inList("j.status", listOf(filter.status)));
       if (filter.since !== undefined) {
         if (!(filter.since instanceof Date) || Number.isNaN(filter.since.getTime())) {

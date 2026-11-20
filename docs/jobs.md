@@ -113,14 +113,16 @@ gw.jobs.schedule("security.scan", { every: "1m" }, async ({ scheduledAt }) => {
 - **A tick runs as a job** (`schedule:<name>`), so it gets retries (3 by default), timeouts, history, `result` and health like any other job.
 - **No overlap:** a tick is skipped while the previous one is still pending or running.
 - **Timing:** a new schedule runs at once; after that it runs `every` after the last tick. `gw.jobs.trigger(name)` makes it due now. There's no cron syntax.
+- **History:** `gw.jobs.list({ schedule: name })` lists a schedule's runs, newest first. Each record's `schedule` is the schedule's name (`null` for enqueued jobs). To run one now and read its result, `trigger(name)`, then `runOnce()`, then `list({ schedule: name, limit: 1 })`.
+- **Driven by an external cron:** a tick is due `every` after the last one ran, so a cron that calls `runOnce` every minute can arrive a moment before a `"1m"` schedule is due, and run it only every other minute. Give such schedules an `every` a little under the cron's period (`"50s"` for a 1-minute cron), or call `trigger(name)` from the cron route.
 
-With rate limiting set up, `createGroundwork` registers `groundwork.rate-limit-cleanup` (hourly `gw.rateLimit.cleanup()`) for you. Turn it off with `jobs: { rateLimitCleanup: false }`.
+With rate limiting set up, `createGroundwork` registers `groundwork.rate-limit-cleanup` (hourly `gw.rateLimit.cleanup()`) for you, and with idempotency keys, `groundwork.idempotency-cleanup`. They show in `health()` and `list()` next to yours. Turn them off with `jobs: { rateLimitCleanup: false, idempotencyCleanup: false }`.
 
 ## Operations
 
 | Method | Effect |
 | --- | --- |
-| `get(id)`, `list({ type, status, since, limit })` | Job records: status, attempts, `lastError`, `result`, timestamps. |
+| `get(id)`, `list({ type, schedule, status, since, limit })` | Job records: status, attempts, `lastError`, `result`, timestamps. |
 | `retry(id)` | Runs a failed or cancelled job again from attempt 1. |
 | `cancel(id)` | Cancels a pending job. Running jobs can't be cancelled. |
 | `prune({ completedOlderThan: "7d", failedOlderThan: "30d" })` | Deletes finished jobs, in batches. The only way groundwork removes jobs. |
@@ -146,5 +148,5 @@ Every statement the worker runs (claim, renew, complete, fail, tick) is a single
   - What changes: batches instead of one job at a time, leases instead of the 5-minute stale-lock rule, and jittered, capped backoff.
 - **VaultDrop:**
   - Each entry of `JOBS` (`everySeconds` + `run` returning stats) becomes a `schedule`; the stats land in the tick's `result`.
-  - `jobHealth()` becomes `health().schedules`, `recentJobRuns()` becomes `list()`, and `?job=<name>` becomes `trigger(name)` then `runOnce()`.
+  - `jobHealth()` becomes `health().schedules`, `recentJobRuns()` becomes `list({ schedule: names })`, and `?job=<name>` becomes `trigger(name)` then `runOnce()`.
   - Retries become the schedule's `maxAttempts`, without blocking the run.

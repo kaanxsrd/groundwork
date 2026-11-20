@@ -203,6 +203,28 @@ describe("must-pass", () => {
     expect(runs[0]).toBe("2026-04-01T00:00:00.000Z");
     expect(runs[9]).toBe("2026-04-01T00:09:00.000Z");
   }, 30_000);
+
+  test("a schedule's runs are listed by its name", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const jobs = jobsOn(database.current, { clock });
+    const [a, b] = [unique("listed"), unique("other")];
+    jobs.schedule(a, { every: "1m" }, () => ({ ok: true }));
+    jobs.schedule(b, { every: "1m" }, () => ({ ok: true }));
+    const handle = jobs.define(unique("plain"), { run: () => {} });
+    await handle.enqueue({});
+    await jobs.runOnce();
+    await jobs.trigger(a);
+    await jobs.runOnce();
+
+    const runs = await jobs.list({ schedule: a });
+    expect(runs.map((run) => [run.schedule, run.type, run.status])).toEqual([
+      [a, `schedule:${a}`, "completed"],
+      [a, `schedule:${a}`, "completed"],
+    ]);
+    expect(await jobs.list({ schedule: [a, b], limit: 10 })).toHaveLength(3);
+    expect((await jobs.list({ type: handle.type }))[0]?.schedule).toBeNull();
+    expect(await jobs.list({ schedule: [] })).toEqual([]);
+  });
 });
 
 describe("retries", () => {

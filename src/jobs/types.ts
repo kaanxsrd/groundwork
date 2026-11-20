@@ -135,6 +135,8 @@ export interface WorkOptions {
 export interface JobRecord {
   readonly id: string;
   readonly type: string;
+  /** For a schedule's run, the schedule's name (its `type` is `schedule:<name>`). Otherwise `null`. */
+  readonly schedule: string | null;
   readonly status: JobStatus;
   readonly payload: unknown;
   readonly priority: number;
@@ -156,6 +158,8 @@ export interface JobRecord {
 
 export interface JobListFilter {
   readonly type?: string | readonly string[] | undefined;
+  /** Runs of these schedules, by name. Combines with `type` like any other filter (AND). */
+  readonly schedule?: string | readonly string[] | undefined;
   readonly status?: JobStatus | readonly JobStatus[] | undefined;
   /** Created at or after this time. */
   readonly since?: Date | undefined;
