@@ -1,5 +1,5 @@
 // Runs in the smoke project under plain Node: migrates a fresh database with the SQL drizzle-kit
-// generated from groundworkTables(), then rate-limits against it through the published API.
+// generated from groundworkTables(), then uses every module against it through the published API.
 import assert from "node:assert/strict";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
@@ -89,14 +89,47 @@ try {
     await greet.enqueue({ name: "node" }, { tx, dedupeKey: "greet:node" });
   });
   const summary = await gw.jobs.runOnce();
-  assert.equal(summary.completed, 2, "the job and the rate-limit cleanup tick");
+  assert.equal(summary.completed, 3, "the job and the two cleanup ticks");
   assert.deepEqual(ran, ["node"]);
   const health = await gw.jobs.health();
   assert.ok(health.types.find((t) => t.type === "smoke.greet").lastSuccessAt instanceof Date);
-  assert.deepEqual(
-    health.schedules.map((s) => s.name),
-    ["groundwork.rate-limit-cleanup"],
+  assert.deepEqual(health.schedules.map((s) => s.name).sort(), [
+    "groundwork.idempotency-cleanup",
+    "groundwork.rate-limit-cleanup",
+  ]);
+
+  // Idempotency and the route helpers: a retry replays, through groundwork/next as an app uses it.
+  const { createRouteHelpers, jobsRoute } = await import("groundwork/next");
+  const { withApiKey, withIdempotency } = createRouteHelpers(gw);
+  const { key: writer } = await gw.apiKeys.create({ name: "writer", scopes: ["posts:write"] });
+  let created = 0;
+  const POST = withApiKey(
+    ["posts:write"],
+    withIdempotency({ scope: (_request, { apiKey }) => `apikey:${apiKey.id}` }, async () =>
+      Response.json({ id: ++created }, { status: 201 }),
+    ),
   );
+  const post = () =>
+    POST(
+      new Request("https://api.test/posts", {
+        method: "POST",
+        headers: { authorization: `Bearer ${writer}`, "idempotency-key": "smoke-key-0001" },
+        body: "{}",
+      }),
+      { params: Promise.resolve({}) },
+    );
+  const [first, again] = [await post(), await post()];
+  assert.deepEqual([first.status, again.status, created], [201, 201, 1]);
+  assert.deepEqual(await again.json(), { id: 1 });
+  assert.equal(again.headers.get("idempotent-replayed"), "true");
+  const cron = jobsRoute(gw, { secret: "smoke-cron-secret-0123456789" });
+  const triggered = await cron(
+    new Request("https://api.test/jobs", {
+      headers: { authorization: "Bearer smoke-cron-secret-0123456789" },
+    }),
+  );
+  assert.equal(triggered.status, 200);
+  assert.equal((await triggered.json()).failed, 0);
   await client.end();
 } finally {
   await admin.unsafe(`drop database if exists "${name}" with (force)`);

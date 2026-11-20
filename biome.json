@@ -6,7 +6,14 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/bun.lock", "!**/*.md", "!tests/migrations"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/bun.lock",
+      "!**/*.md",
+      "!tests/migrations",
+      "!examples/*/drizzle"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -85,6 +92,19 @@
       "includes": ["drizzle.config.ts"],
       "linter": {
         "rules": {
+          "style": {
+            "noDefaultExport": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["examples/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useImportExtensions": "off"
+          },
           "style": {
             "noDefaultExport": "off"
           }

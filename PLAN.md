@@ -64,7 +64,7 @@ groundwork/
     api-keys/
     jobs/
     idempotency/
-    next/           Next.js route helpers (imports server-only)
+    next/           Next.js route helpers (no `next` import; see the Phase 5 log)
     testing/        fake clock, db reset, helpers for apps testing their own code
     internal/       durations ('15m', '90d'), HMAC/HKDF, CIDR matching, errors
   tests/
@@ -90,7 +90,7 @@ Subpath exports: `groundwork`, `groundwork/schema`, `groundwork/rate-limit`, `gr
 - Changesets for versions and CHANGELOG, and npm publish with provenance.
 - ESM only.
 
-**Drivers:** accept any Drizzle `PgDatabase`. The jobs module needs interactive transactions, so document that `neon-http` won't work for jobs (use the Neon websocket driver or a pooled TCP driver).
+**Drivers:** accept any Drizzle `PgDatabase`. ~~The jobs module needs interactive transactions, so document that `neon-http` won't work for jobs (use the Neon websocket driver or a pooled TCP driver).~~ *Corrected in Phase 4: every groundwork statement is a single statement; only passing `{ tx }` needs a driver with transactions.*
 
 ## 5. API sketch (target developer experience)
 
@@ -303,6 +303,11 @@ The sketch is a direction, not a contract. Improve it if a better shape appears,
   - **same key, different body:** 422;
   - **same key, request still in progress:** 409.
 - Based on VaultDrop's `idempotency` table.
+- **Decided in Phase 5** (details in the Decisions log):
+  - it's `gw.idempotency.handle(request, { scope, ttl, required, fingerprint }, handler)`, with `withIdempotency(options, handler)` in `groundwork/next`;
+  - the status codes follow the IETF draft (400/422/409), and only 2xx and 3xx responses are stored;
+  - a running request holds its key with a renewed lease, so a crash frees it;
+  - `run(input, fn)` covers anything that isn't an HTTP handler, and storing less than the full response.
 - **Must-pass tests:**
   - concurrent duplicates: the handler runs once;
   - replay returns the same status and body;
@@ -313,6 +318,7 @@ The sketch is a direction, not a contract. Improve it if a better shape appears,
 - `withApiKey(scopes, handler)`, `withRateLimit(rule, keyFn, handler)`, `jobsRoute(gw, { secret, budgetMs })` and `withIdempotency`.
 - `getClientIp(headers, { trustProxy })`. Proxy headers are untrusted by default. Presets: `vercel`, `cloudflare` (`cf-connecting-ip`), `x-forwarded-for` with a hop count.
 - Read the installed Next.js docs before writing this. Next 16 has breaking changes.
+- **Decided in Phase 5:** the wrappers come from `createRouteHelpers(gw, { trustProxy })`, so they're bound to one instance and one proxy setup, with the signatures above. `jobsRoute` and `getClientIp` are standalone. Nothing imports `next` or `server-only`.
 
 ## 7. Phases
 
@@ -359,8 +365,8 @@ Don't start the next phase until I approve.
 - **Done when:** vante.app's `worker.ts` + `features/jobs` and VaultDrop's runner can both be replaced.
 
 ### Phase 5: Idempotency + Next.js helpers + example
-- [ ] 6.5 and 6.6
-- [ ] `examples/next-app` uses every module end to end and runs in CI
+- [x] 6.5 and 6.6
+- [x] `examples/next-app` uses every module end to end and runs in CI
 - **Done when:** the README quickstart works copy-pasted into a fresh Next.js app.
 
 ### Phase 6: Docs + 0.1 release
@@ -556,6 +562,69 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - advancing a fake clock by a full lease correctly expired a running tick's lease.
   
   Neither was a library bug.
+- 2026-11-19 (Phase 5): The owner replied "continue" to the Phase 4 report, which I took as approval of Phase 4 and of both recommendations:
+  - **`next` and `server-only`:** neither is a dependency. `groundwork/next` turned out not to need `next` at all, so `drizzle-orm` stays the only peer. Route handlers take a Web `Request` and `{ params: Promise<…> }`, and Next's generated route validator accepts any function of that shape. `server-only` isn't needed: groundwork imports `node:crypto`, so a client bundle fails anyway.
+  - **bubblehouse-dk's once-ever outbox** keeps that state in its own table; no new jobs API.
+- 2026-11-19: Before starting, a stray edit (`rowsOf(  n`) in `src/jobs/jobs.ts` after the Phase 4 commit broke the build. The owner chose to revert it, so the file is back to the committed version.
+- 2026-11-19: `gw_idempotency_keys` follows VaultDrop's `idempotency_keys` (scope, key, request hash, stored response, created).
+  - **Hashed:** the primary key is HMAC(subkey, [`http`|`run`, scope, client key]), so raw keys are never stored and `run()` keys never collide with HTTP ones. The fingerprint is a keyed HMAC too, because an unkeyed hash of a small JSON body can be guessed. The subkey is the `idempotency` purpose reserved in Phase 0.
+  - **Leases:** `locked_by` and `locked_until`, renewed every lease/3 (default lease `"30s"`). This fixes VaultDrop's weak spot: there, a crashed request leaves its key "in progress" for 24 hours. Completing or releasing requires `locked_by`, so a late finisher can't overwrite a retry's result.
+  - **`response` is `text` holding JSON**, not `jsonb`: jsonb rejects `\u0000`, which a stored body may contain.
+  - `expires_at` is set at the start and again on completion (`ttl` from completion, default `"24h"`, like Stripe and VaultDrop). An expired row, or an abandoned one whose lease ran out, means the same as no row.
+- 2026-11-19: Claiming is one statement: `INSERT … ON CONFLICT DO UPDATE … WHERE` (expired, or abandoned with the same fingerprint), plus a fallback select of the existing row. A row committed after the statement's snapshot is invisible to that select, so an empty result is retried with a fresh snapshot up to 3 times. After that it's treated as in progress, the safe answer. This is the same pattern as job enqueue. Fingerprints are compared with `timingSafeEqual`.
+- 2026-11-19: HTTP behaviour follows draft-ietf-httpapi-idempotency-key-header-08:
+  - 400 `idempotency_key_missing` (only with `required: true`; the default runs the handler unprotected, as VaultDrop does);
+  - 400 `idempotency_key_invalid`;
+  - 422 `idempotency_key_reused`;
+  - 409 `idempotency_key_in_use`, with `Retry-After: 1`.
+
+  The error body is groundwork's usual `{ error: { code, message } }`, not problem+json; the draft only shows problem+json as an example. Keys are 8–255 visible ASCII characters, sent bare (Stripe, VaultDrop) or as the draft's sf-string. The default fingerprint is method + path with query + body bytes, read from `request.clone()` so the handler can still read the body. `fingerprint` overrides it once the body has been read.
+- 2026-11-19: Only 2xx and 3xx responses are stored. A 4xx, 5xx or throw releases the key, as VaultDrop does on a throw. Storing a 429 or 409 would replay a transient error for a day, and a failed request is by convention one that did nothing. Stripe also stores 5xx; groundwork doesn't, and documents that handlers should be transactional.
+  - Never stored: `Set-Cookie` (credentials), per-request headers (`RateLimit*`, `Retry-After`, `Date`, `Content-Length`, hop-by-hop).
+  - Bodies are stored as UTF-8 text when valid, else base64. Replays get `Idempotent-Replayed: true`, the header name Stripe and VaultDrop use.
+  - The first response is rebuilt from the bytes that were stored, so the first call and a replay are byte-identical.
+- 2026-11-19: `run({ scope, key, fingerprint, ttl }, fn)` was added beyond the plan. VaultDrop's route stores only `{ id, expiresAt }` and derives the receipt token (a credential) on every replay, which `handle()` alone couldn't express. It's also the natural API for webhook events.
+  - It returns `{ ok, value, replayed }` or `{ ok: false, reason: "mismatch" | "in_progress" }`.
+  - The value is the JSON round trip on the first call too, so it never differs between calls, and its type is `Jsonify<T>`: `Date` becomes `string`, and functions and `undefined` properties drop out or become optional. The type is checked on TS 5.9, 6.0 and 7.0.
+- 2026-11-19: `createGroundwork` gets `tables.idempotencyKeys`, `idempotency: { ttl, lease }` and `gw.idempotency`. `gw.jobs` also schedules `groundwork.idempotency-cleanup` hourly; `jobs: { idempotencyCleanup: false }` turns it off.
+- 2026-11-19: The `groundwork/next` signatures are as the plan wrote them, but bound to one instance: `createRouteHelpers(gw, { trustProxy })` returns `withApiKey(scopes, handler)`, `withRateLimit(rule, key, handler)`, `withIdempotency(options, handler)` and `clientIp(request)`. `withApiKey(scopes, handler)` has nowhere else to get `gw` from. The factory also gives one place for `trustProxy`, which `withApiKey` needs for IP allowlists.
+  - Handlers get Next's `(request, context)`, and wrappers add to the context: `context.apiKey`.
+  - Plain nested generic wrappers don't infer what an outer wrapper adds. I tested the shapes in a scratch project: a non-generic first overload of `withApiKey` makes nested `withRateLimit` and `withIdempotency` infer `apiKey`, and a second generic overload takes `withApiKey<RouteContext<"/posts/[id]">>` for typed params.
+  - `withRateLimit`'s key function may return `null` to skip limiting.
+- 2026-11-19: `jobsRoute(gw, { secret, budgetMs, concurrency })` answers GET and POST (Vercel Cron sends GET with `Authorization: Bearer $CRON_SECRET`).
+  - The secret must be at least 16 characters with no whitespace, checked at startup. Tokens are compared as HMAC digests, so the time doesn't depend on length either.
+  - `?schedule=<name>` calls `trigger(name)` first, as VaultDrop's `?job=` does (404 if unknown). The response is the `RunSummary`.
+- 2026-11-19: `getClientIp(input, { trustProxy })`:
+  - **Presets:** `"none"` (the default) reads nothing; `"vercel"` reads `X-Real-IP`; `"cloudflare"` reads `CF-Connecting-IP`; `{ header, hops }` takes the entry `hops` from the right.
+  - **Why `"none"`:** Next's `next start` sets `X-Forwarded-For` only when the client didn't send one (`??=` in base-server.js), so on a bare server every header is spoofable.
+  - **Vercel:** its docs say it overwrites `X-Forwarded-For`, and that `X-Real-IP` is identical.
+  - Ports and brackets are stripped, and addresses are canonicalised with the CIDR module's parser (now exported internally as `canonicalIp`). Bad `trustProxy` values throw at startup.
+  - vante.app's IPv6 /64 bucketing for rate limits isn't done; it's for Phase 7.
+- 2026-11-19: Next.js 16.4.6's `create-next-app` turns on `cacheComponents` by default. With it, a GET handler that reads nothing from the request is prerendered at build. Next tracks `request.headers` access as dynamic (`proxyNextRequest`), so every groundwork wrapper and `jobsRoute` run at request time. The docs say to call `await connection()` in other GET routes, as the example's health route does.
+- 2026-11-19: `examples/next-app` is the app `create-next-app` 16.4.6 generates (Cache Components on), plus every module:
+  - admin-only key creation;
+  - posts with a per-key write limit, idempotency, an audit entry and a job enqueued in the same transaction;
+  - a daily retention schedule, the cron route, the audit log and queue health.
+
+  Its migrations are generated by its own drizzle-kit and committed. It depends on `groundwork@^0.1.0`, so `npm install` works there once 0.1 is published; until then, `node scripts/example.mjs dev` runs it from the checkout. Vercel Hobby fails a deploy whose cron runs more than once a day (Vercel's cron docs), so its `vercel.json` runs `/api/jobs` daily.
+- 2026-11-19: `scripts/example.mjs` (`bun run example`, a new CI job) installs the packed tarball into two apps outside the repo, which keeps Turbopack's root and drizzle-orm to one copy each. It builds each with `next build`, starts it with `next start` and drives it over HTTP:
+  - **examples/next-app:** every module, with migration drift checked;
+  - **the README quickstart:** a fresh `create-next-app` project, with the README's `filename="…"` blocks and its `npm install` / `npx drizzle-kit` lines run as written (groundwork swapped for the tarball). That is the Phase 5 "done when", checked on every push. `next build` type-checks the quickstart's code, which Biome doesn't see (Markdown is excluded).
+- 2026-11-20: Run under `npx -p node@22`, npm leaves `npm_config_package=node@22` in the environment, and the script's own `npx create-next-app@…` then ran inside that package instead. `scripts/example.mjs` drops the variable for everything it starts. CI uses `setup-node`, so only local runs hit this.
+- 2026-11-19: Root dev tooling:
+  - I briefly added `next` and `react` as root devDependencies to read Next's docs. With `react` there, Biome 2 switched on its React rules and called `useTestDatabase()` a hook, so they live only in the example now.
+  - Biome's example override allows default exports and extensionless imports (Next's conventions), and generated example migrations are excluded. An early `biome check --write` had rewritten the example's imports to `.ts`; I reverted that once the override was in.
+- 2026-11-19: Mutation checks, each caught and restored byte-for-byte:
+  - a takeover of live keys fails 16 tests, including all three concurrency must-pass tests;
+  - no fingerprint check fails 5 tests;
+  - no expiry fails the TTL must-pass test;
+  - no lease heartbeat fails the lease-renewal test;
+  - no fencing on completion fails the crash-recovery test.
+- 2026-11-19: Not done:
+  - a `{ tx }` option to store the result inside the handler's own transaction, which would close the "crashed after commit, before storing" gap (documented);
+  - problem+json error bodies;
+  - waiting for an in-flight duplicate instead of answering 409;
+  - IPv6 /64 bucketing.
 
 ## 11. Alternatives check (2026-11-19)
 
@@ -582,5 +651,5 @@ The Phase 0 re-check of section 1. Versions are from the npm registry. Two claim
    
    RateLimit headers: the current draft is [draft-ietf-httpapi-ratelimit-headers-11](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/) (`RateLimit` and `RateLimit-Policy` fields). Re-check it in Phase 1.
 3. **API keys (6.3):** the planned `reason` enum is close to Unkey's verify codes, so keep it. Copy GitHub's approach for checksums and prefixes that secret scanners can recognize ([GitHub blog](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/)). Also, **vante.app stores `HMAC(pepper, key)` with the raw pepper, but groundwork will use an HKDF subkey.** Existing vante keys won't verify after the Phase 7 migration unless Phase 3 adds a verify-only legacy hash option or the keys are re-issued. Decide in Phase 3.
-4. **Idempotency (6.5):** the least crowded space, so feature it. Follow [draft-ietf-httpapi-idempotency-key-header-08](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/): 400 when a required key is missing, 422 for a different body, 409 while the first request is in flight.
+4. **Idempotency (6.5):** *adopted in Phase 5.* The least crowded space, so feature it. Follow [draft-ietf-httpapi-idempotency-key-header-08](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/): 400 when a required key is missing, 422 for a different body, 409 while the first request is in flight.
 5. **Audit (6.2):** drizzle-audit is the closest rival. Keep explicit, typed, in-transaction `record()` rather than ORM interception.

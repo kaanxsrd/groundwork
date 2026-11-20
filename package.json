@@ -82,6 +82,7 @@
     "db:generate": "drizzle-kit generate",
     "db:drift": "bun scripts/check-migrations.ts",
     "smoke": "bun run build && publint --strict && attw --pack . --profile esm-only && node scripts/smoke.mjs",
+    "example": "node scripts/example.mjs",
     "changeset": "changeset"
   },
   "peerDependencies": {

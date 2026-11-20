@@ -5,7 +5,7 @@ import { toJsonValue } from "../audit/json.ts";
 import type { Clock } from "../internal/clock.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
-import { GroundworkError } from "../internal/errors.ts";
+import { errorText, GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { type StandardSchemaV1, validateWith } from "../internal/standard-schema.ts";
 import { assertTableColumns } from "../internal/table.ts";
@@ -172,11 +172,6 @@ function integer(
     );
   }
   return value as number;
-}
-
-function errorText(error: unknown): { name: string; message: string } {
-  if (error instanceof Error) return { name: error.name, message: error.message };
-  return { name: "Error", message: String(error) };
 }
 
 /**

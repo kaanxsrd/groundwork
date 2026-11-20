@@ -8,5 +8,7 @@
 - [Audit log](audit.md): recording in transactions, diffs, redaction, querying, retention, tamper resistance.
 - [API keys](api-keys.md): key format, scopes, verification, rotation, allowlists, per-key limits, migration from vante.app.
 - [Background jobs](jobs.md): defining and enqueueing jobs, workers, leases, retries, schedules, health.
+- [Idempotency keys](idempotency.md): safe retries for HTTP handlers, webhooks and anything else, with stored responses.
+- [Next.js route helpers](next.md): `withApiKey`, `withRateLimit`, `withIdempotency`, a cron route for jobs, and the client's IP.
 
-Coming with their phases: background jobs, idempotency keys, Next.js helpers, testing your app, and migrating from hand-rolled tables.
+Coming with their phases: testing your app, and migrating from hand-rolled tables. [`examples/next-app`](../examples/next-app) shows every module in one app.

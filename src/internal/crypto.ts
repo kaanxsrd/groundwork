@@ -68,14 +68,14 @@ export function hmacSha256(key: Uint8Array, data: string | Uint8Array): Buffer {
 }
 
 /**
- * HMAC-SHA256 over several strings with an unambiguous encoding: each part is prefixed with its
- * UTF-8 byte length, so `["ab", "c"]` and `["a", "bc"]` never produce the same digest.
+ * HMAC-SHA256 over several parts with an unambiguous encoding: each part is prefixed with its
+ * byte length (strings as UTF-8), so `["ab", "c"]` and `["a", "bc"]` never produce the same digest.
  */
-export function hmacSha256Parts(key: Uint8Array, parts: readonly string[]): Buffer {
+export function hmacSha256Parts(key: Uint8Array, parts: readonly (string | Uint8Array)[]): Buffer {
   const hmac = createHmac("sha256", key);
   const length = Buffer.alloc(4);
   for (const part of parts) {
-    const bytes = Buffer.from(part, "utf8");
+    const bytes = typeof part === "string" ? Buffer.from(part, "utf8") : part;
     length.writeUInt32BE(bytes.length, 0);
     hmac.update(length);
     hmac.update(bytes);

@@ -14,7 +14,9 @@ import {
 } from "groundwork";
 import { createApiKeys, type VerifyResult } from "groundwork/api-keys";
 import { type AuditEntry, createAuditLog, diff } from "groundwork/audit";
+import { createIdempotency, type Jsonify, type RunResult } from "groundwork/idempotency";
 import { createJobs, type RunSummary, type StandardSchemaV1 } from "groundwork/jobs";
+import { createRouteHelpers, getClientIp, jobsRoute } from "groundwork/next";
 import { createRateLimiter, type RateLimitResult, redisStore } from "groundwork/rate-limit";
 import { groundworkTables } from "groundwork/schema";
 import { createTestClock } from "groundwork/testing";
@@ -170,4 +172,60 @@ const worked: Promise<RunSummary> = jobs.work({
   signal: AbortSignal.timeout(1),
 });
 
+// Idempotency: run() returns what JSON gives back, so a Date is a string on every call.
+const { idempotencyKeys } = groundworkTables();
+const idempotency = createIdempotency({ db: jsDb, table: idempotencyKeys, secret: "s" });
+const ran: Promise<RunResult<{ at: string; n: number }>> = idempotency.run(
+  { scope: "stripe", key: "evt_1" },
+  async () => ({ at: new Date(), n: 1, dropped: () => 1 }),
+);
+// @ts-expect-error a Date comes back as a string
+const asDate: Jsonify<{ at: Date }> = { at: new Date() };
+const handled: Promise<Response> = idempotency.handle(
+  new Request("https://x"),
+  { scope: "u" },
+  () => Response.json({}),
+);
+
+// Next.js route helpers: what an outer wrapper adds is typed in the wrappers inside it, and the
+// result fits the route-handler type Next.js generates.
+const { withApiKey, withRateLimit, withIdempotency } = createRouteHelpers(gwKeys, {
+  trustProxy: { header: "x-forwarded-for", hops: 1 },
+});
+const writes = createRateLimiter({ db: jsDb, table: rateLimits, secret: "s" }).rule({
+  name: "writes",
+  limit: 10,
+  window: "1m",
+});
+const POST = withApiKey(
+  ["billing:read"],
+  withRateLimit(
+    writes,
+    (_request, { apiKey }) => apiKey.id,
+    withIdempotency(
+      { scope: (_request, { apiKey }) => `apikey:${apiKey.id}` },
+      async (_request, { apiKey, params }) => Response.json({ id: apiKey.id, ...(await params) }),
+    ),
+  ),
+);
+type NextRequestLike = Request & { readonly nextUrl: URL };
+type RouteHandlerConfig = {
+  POST?: (
+    request: NextRequestLike,
+    context: { params: Promise<{ id: string }> },
+  ) => Promise<Response | undefined> | Response | undefined;
+};
+const config: RouteHandlerConfig = { POST };
+const typedParams = withApiKey<{ params: Promise<{ id: string }> }>(
+  ["billing:read"],
+  async (_request, { params }) => new Response((await params).id),
+);
+// @ts-expect-error not a declared scope
+withApiKey(["posts:read"], async () => new Response());
+const cron: (request: Request) => Promise<Response> = jobsRoute({ jobs }, { secret: "s" });
+const ip: string | null = getClientIp(new Headers(), { trustProxy: "vercel" });
+// @ts-expect-error not a trustProxy preset
+getClientIp(new Headers(), { trustProxy: "fly" });
+
 void [window, noUnit, code, opsName, result, retry, recorded, page, verified, worked];
+void [ran, asDate, handled, config, typedParams, cron, ip];

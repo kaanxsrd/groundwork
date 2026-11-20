@@ -78,6 +78,15 @@ export function parseIp(text: string): bigint | null {
 
 const isMappedV4 = (value: bigint) => value >> 32n === 0xffffn;
 
+/**
+ * An address in canonical form (IPv4 dotted, IPv6 per RFC 5952, IPv4-mapped IPv6 as IPv4), or
+ * `null` if `text` isn't an address.
+ */
+export function canonicalIp(text: string): string | null {
+  const value = parseIp(text);
+  return value === null ? null : formatIp(value);
+}
+
 function formatIp(value: bigint): string {
   if (isMappedV4(value)) {
     const v4 = value & 0xffffffffn;

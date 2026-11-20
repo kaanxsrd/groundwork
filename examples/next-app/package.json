@@ -1,0 +1,29 @@
+{
+  "name": "groundwork-example-next-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A Next.js 16 app that uses every groundwork module.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "groundwork": "^0.1.0",
+    "next": "16.4.6",
+    "postgres": "4.1.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "typescript": "5.9.3"
+  }
+}

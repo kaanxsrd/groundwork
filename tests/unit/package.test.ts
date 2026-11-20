@@ -55,8 +55,13 @@ describe("package.json", () => {
       "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
       "./api-keys": ["API_KEY_AUDIT_ACTIONS", "apiKeyAuditEvent", "createApiKeys"],
       "./jobs": ["backoffDelayMs", "createJobs"],
-      "./idempotency": [],
-      "./next": [],
+      "./idempotency": [
+        "IDEMPOTENCY_KEY_HEADER",
+        "REPLAYED_HEADER",
+        "createIdempotency",
+        "parseIdempotencyKey",
+      ],
+      "./next": ["createRouteHelpers", "getClientIp", "jobsRoute"],
       "./testing": ["createTestClock"],
     };
     for (const subpath of SUBPATHS) {

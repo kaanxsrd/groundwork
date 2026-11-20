@@ -16,6 +16,7 @@
  * const loginLimit = gw.rateLimit.rule({ name: "login:ip", limit: 5, window: "15m" });
  * await gw.audit.record({ actor: { type: "system" }, action: "post.create" });
  * const auth = await gw.apiKeys.verify(request, { scopes: ["posts:read"] });
+ * return gw.idempotency.handle(request, { scope: `apikey:${auth.key.id}` }, () => createPost());
  * ```
  *
  * @module
@@ -30,6 +31,8 @@ import type { ApiKeyEvent, ApiKeyRateLimit, ApiKeys } from "./api-keys/types.ts"
 import { createAuditLog } from "./audit/audit-log.ts";
 import type { RedactRule } from "./audit/json.ts";
 import type { AuditLog } from "./audit/types.ts";
+import { createIdempotency } from "./idempotency/idempotency.ts";
+import type { Idempotency } from "./idempotency/types.ts";
 import type { Clock } from "./internal/clock.ts";
 import { deriveSubkeys, type Secret } from "./internal/crypto.ts";
 import type { GroundworkDatabase } from "./internal/db.ts";
@@ -42,6 +45,7 @@ import { createRateLimiter } from "./rate-limit/limiter.ts";
 import type { OnError, RateLimiter, RateLimitStore } from "./rate-limit/types.ts";
 import type { ApiKeysTable } from "./schema/api-keys.ts";
 import type { AuditLogTable } from "./schema/audit-log.ts";
+import type { IdempotencyKeysTable } from "./schema/idempotency-keys.ts";
 import type { JobSchedulesTable, JobsTable } from "./schema/jobs.ts";
 import type { RateLimitsTable } from "./schema/rate-limits.ts";
 
@@ -69,6 +73,7 @@ export interface GroundworkOptions<
     readonly apiKeys?: ApiKeysTable | undefined;
     readonly jobs?: JobsTable | undefined;
     readonly jobSchedules?: JobSchedulesTable | undefined;
+    readonly idempotencyKeys?: IdempotencyKeysTable | undefined;
   };
   /** At least 32 bytes. Changing it invalidates every API key and resets every rate limit. */
   readonly secret: Secret;
@@ -130,6 +135,19 @@ export interface GroundworkOptions<
          * `true`.
          */
         readonly rateLimitCleanup?: boolean | undefined;
+        /**
+         * Schedules `gw.idempotency.cleanup()` every hour when the idempotency table is set up.
+         * Defaults to `true`.
+         */
+        readonly idempotencyCleanup?: boolean | undefined;
+      }
+    | undefined;
+  readonly idempotency?:
+    | {
+        /** How long a completed response is replayed. Defaults to `"24h"`. */
+        readonly ttl?: Duration | undefined;
+        /** How soon a crashed request frees its key; renewed while the request runs. Defaults to `"30s"`. */
+        readonly lease?: Duration | undefined;
       }
     | undefined;
 }
@@ -144,6 +162,7 @@ export interface Groundwork<
   readonly audit: AuditLog<TAuditAction | ApiKeyAuditAction, TAuditEntity | "api_key">;
   readonly apiKeys: ApiKeys<TScope>;
   readonly jobs: Jobs;
+  readonly idempotency: Idempotency;
 }
 
 /** Wires every module to one database, one secret, one logger and one clock. */
@@ -290,7 +309,28 @@ export function createGroundwork<
         deleted: await limiter.cleanup(),
       }));
     }
+    if (config.idempotencyCleanup !== false && tables.idempotencyKeys !== undefined) {
+      const keys = getIdempotency();
+      jobs.schedule("groundwork.idempotency-cleanup", { every: "1h" }, async () => ({
+        deleted: await keys.cleanup(),
+      }));
+    }
     return jobs;
+  }
+
+  let idempotency: Idempotency | undefined;
+  function getIdempotency(): Idempotency {
+    if (idempotency) return idempotency;
+    if (tables.idempotencyKeys === undefined) throw missingTable("idempotency", "idempotencyKeys");
+    const config = options.idempotency ?? {};
+    idempotency = createIdempotency({
+      ...shared,
+      db,
+      table: tables.idempotencyKeys,
+      ttl: config.ttl,
+      lease: config.lease,
+    });
+    return idempotency;
   }
 
   return {
@@ -305,6 +345,9 @@ export function createGroundwork<
     },
     get jobs() {
       return getJobs();
+    },
+    get idempotency() {
+      return getIdempotency();
     },
   };
 }

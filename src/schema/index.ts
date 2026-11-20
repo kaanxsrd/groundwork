@@ -5,7 +5,8 @@
  * // db/schema/groundwork.ts
  * import { groundworkTables } from "groundwork/schema";
  *
- * export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules } = groundworkTables();
+ * export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKeys } =
+ *   groundworkTables();
  * ```
  *
  * Export the tables you use from a file drizzle-kit reads, and `drizzle-kit generate` creates the
@@ -18,6 +19,7 @@ import type { PgSchema } from "drizzle-orm/pg-core";
 import { type ApiKeysTable, buildApiKeysTable } from "./api-keys.ts";
 import { type AuditLogTable, buildAuditLogTable } from "./audit-log.ts";
 import { createTableFactory, DEFAULT_PREFIX } from "./factory.ts";
+import { buildIdempotencyKeysTable, type IdempotencyKeysTable } from "./idempotency-keys.ts";
 import {
   buildJobSchedulesTable,
   buildJobsTable,
@@ -26,7 +28,14 @@ import {
 } from "./jobs.ts";
 import { buildRateLimitsTable, type RateLimitsTable } from "./rate-limits.ts";
 
-export type { ApiKeysTable, AuditLogTable, JobSchedulesTable, JobsTable, RateLimitsTable };
+export type {
+  ApiKeysTable,
+  AuditLogTable,
+  IdempotencyKeysTable,
+  JobSchedulesTable,
+  JobsTable,
+  RateLimitsTable,
+};
 export { DEFAULT_PREFIX };
 
 export interface GroundworkTablesOptions<TSchema extends string | undefined = undefined> {
@@ -50,6 +59,7 @@ export type GroundworkTables<TSchema extends string | undefined = undefined> = {
   readonly apiKeys: ApiKeysTable<TSchema>;
   readonly jobs: JobsTable<TSchema>;
   readonly jobSchedules: JobSchedulesTable<TSchema>;
+  readonly idempotencyKeys: IdempotencyKeysTable<TSchema>;
 } & (TSchema extends string
   ? {
       /** The Postgres schema. Export it too, or drizzle-kit won't generate `CREATE SCHEMA`. */
@@ -75,6 +85,7 @@ export function groundworkTables<const TSchema extends string | undefined = unde
     apiKeys: buildApiKeysTable(factory),
     jobs: buildJobsTable(factory),
     jobSchedules: buildJobSchedulesTable(factory),
+    idempotencyKeys: buildIdempotencyKeysTable(factory),
   };
   return (
     factory.pgSchema === undefined ? tables : { ...tables, schema: factory.pgSchema }

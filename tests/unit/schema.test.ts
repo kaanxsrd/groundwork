@@ -96,6 +96,32 @@ describe("groundworkTables", () => {
     ]);
   });
 
+  test("builds the idempotency-key table with every name prefixed", () => {
+    const { idempotencyKeys } = groundworkTables({ prefix: "app_" });
+    expect(getTableName(idempotencyKeys)).toBe("app_idempotency_keys");
+    expect(indexNames(idempotencyKeys)).toEqual(["app_idempotency_keys_expires_at_idx"]);
+    const columns = getTableConfig(idempotencyKeys).columns.map((c) => [
+      c.name,
+      c.getSQLType(),
+      c.notNull,
+    ]);
+    expect(columns).toEqual([
+      ["key", "text", true],
+      ["scope", "text", true],
+      ["fingerprint", "text", true],
+      ["locked_by", "text", false],
+      ["locked_until", "timestamp with time zone", false],
+      ["response", "text", false],
+      ["created_at", "timestamp with time zone", true],
+      ["completed_at", "timestamp with time zone", false],
+      ["expires_at", "timestamp with time zone", true],
+    ]);
+    expect(getTableConfig(idempotencyKeys).primaryKeys).toEqual([]);
+    expect(getTableConfig(idempotencyKeys).columns.find((c) => c.name === "key")?.primary).toBe(
+      true,
+    );
+  });
+
   test.each([["GW_"], ["1gw_"], ["gw-"], [" gw"], ["gw_é"], [5]])(
     "rejects the prefix %p",
     (prefix) => {

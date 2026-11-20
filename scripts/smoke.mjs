@@ -90,13 +90,11 @@ step(`install into a fresh project (TypeScript ${tsVersions.join(", ")})`, () =>
 
 step(`import every subpath on Node ${process.versions.node}`, () => run("node runtime.mjs", app));
 
-step(
-  `rate limiting, audit, API keys and jobs against Postgres on Node ${process.versions.node}`,
-  () =>
-    run("node postgres.mjs", app, {
-      SMOKE_DATABASE_URL: maintenanceUrl,
-      SMOKE_MIGRATIONS: join(root, "tests", "migrations"),
-    }),
+step(`every module against Postgres on Node ${process.versions.node}`, () =>
+  run("node postgres.mjs", app, {
+    SMOKE_DATABASE_URL: maintenanceUrl,
+    SMOKE_MIGRATIONS: join(root, "tests", "migrations"),
+  }),
 );
 
 const resolutions = [

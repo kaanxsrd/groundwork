@@ -3,7 +3,8 @@
 import { groundworkTables } from "../../src/schema/index.ts";
 
 // What most apps do: the default "gw_" prefix in the default schema.
-export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules } = groundworkTables();
+export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKeys } =
+  groundworkTables();
 
 // A second set with another prefix in its own Postgres schema, to prove both options end to end.
 // The schema object is exported too, so drizzle-kit generates CREATE SCHEMA.
@@ -14,6 +15,7 @@ export const {
   apiKeys: altApiKeys,
   jobs: altJobs,
   jobSchedules: altJobSchedules,
+  idempotencyKeys: altIdempotencyKeys,
 } = groundworkTables({
   prefix: "alt_",
   schema: "groundwork_alt",

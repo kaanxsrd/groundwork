@@ -75,3 +75,21 @@ jobs:
       # import every subpath and rate-limit against Postgres on Node 22, and type-check a consumer
       # with TypeScript 5.9, 6.0 and 7.0.
       - run: bun run smoke
+
+  example:
+    name: Next.js example and README quickstart
+    runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - uses: actions/setup-node@v7
+        with: { node-version: 22 }
+      - run: bun install --frozen-lockfile
+      - run: bun run db:up
+      # Packs groundwork, then builds two apps outside the repo with `next build` and drives them
+      # over HTTP with `next start`: examples/next-app (every module), and a fresh
+      # create-next-app project with the README quickstart's files and commands pasted in.
+      - run: bun run example

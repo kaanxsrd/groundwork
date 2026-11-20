@@ -33,3 +33,9 @@ export function isGroundworkError(error: unknown): error is GroundworkError {
     typeof error === "object" && error !== null && (error as { [BRAND]?: unknown })[BRAND] === true
   );
 }
+
+/** An error's name and message, for log context. Never the stack, which can hold arguments. */
+export function errorText(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) return { name: error.name, message: error.message };
+  return { name: "Error", message: String(error) };
+}

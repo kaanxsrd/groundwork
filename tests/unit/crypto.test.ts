@@ -148,6 +148,12 @@ describe("hmacSha256Parts", () => {
     expect(hmacSha256Parts(key, ["€", "a"])).toEqual(manual);
   });
 
+  test("hashes byte parts exactly like the same text", () => {
+    const bytes = new TextEncoder().encode("€a");
+    expect(hmacSha256Parts(key, [bytes, "x"])).toEqual(hmacSha256Parts(key, ["€a", "x"]));
+    expect(hmacSha256Parts(key, [new Uint8Array([0xff])])).not.toEqual(hmacSha256Parts(key, ["�"]));
+  });
+
   test("never changes (it is part of the storage format)", () => {
     expect(hmacSha256Parts(key, ["login:ip", "203.0.113.7"]).toString("base64url")).toBe(
       "6Zimm64yD_Pf1iwao_wIzT0GHrsE49hevETokNcDSRw",

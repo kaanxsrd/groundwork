@@ -36,6 +36,117 @@ groundwork takes a different shape:
 - **No Redis needed.** Postgres is the only infrastructure. One round trip on hot paths.
 - **Secure by default.** API keys and rate-limit subjects are stored as HMACs, comparisons are timing-safe, configured audit fields are redacted, and secrets are never logged.
 
+## Quickstart
+
+In a Next.js app (`npx create-next-app@latest`) with a Postgres database:
+
+```sh
+npm install groundwork drizzle-orm postgres
+npm install -D drizzle-kit
+```
+
+**1. Add groundwork's tables to your Drizzle schema**, and let drizzle-kit create them. Put `DATABASE_URL` in `.env.local`, plus `GROUNDWORK_SECRET` and `CRON_SECRET`, each from `openssl rand -base64 32`.
+
+```ts filename="db/schema.ts"
+import { groundworkTables } from "groundwork/schema";
+
+export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKeys } =
+  groundworkTables();
+```
+
+```ts filename="drizzle.config.ts"
+import { defineConfig } from "drizzle-kit";
+
+process.loadEnvFile(".env.local");
+
+export default defineConfig({
+  dialect: "postgresql",
+  schema: "./db/schema.ts",
+  out: "./drizzle",
+  dbCredentials: { url: process.env.DATABASE_URL ?? "" },
+});
+```
+
+```sh
+npx drizzle-kit generate
+npx drizzle-kit migrate
+```
+
+**2. Create one instance** with your own names. Audit actions, API-key scopes and job payloads are typed from here on.
+
+```ts filename="lib/groundwork.ts"
+import { drizzle } from "drizzle-orm/postgres-js";
+import { createGroundwork } from "groundwork";
+import { createRouteHelpers } from "groundwork/next";
+import postgres from "postgres";
+import * as tables from "@/db/schema";
+
+export const db = drizzle(postgres(process.env.DATABASE_URL ?? ""));
+
+export const gw = createGroundwork({
+  db,
+  tables,
+  secret: process.env.GROUNDWORK_SECRET ?? "",
+  audit: { actions: ["note.create"] },
+  apiKeys: { namespace: "demo", scopes: { "notes:write": "Create notes" } },
+});
+
+export const { withApiKey, withIdempotency } = createRouteHelpers(gw);
+
+export const noteCreated = gw.jobs.define("note.created", {
+  async run(note: { id: string }) {
+    console.log(`Note ${note.id} was created.`);
+  },
+});
+```
+
+**3. Protect a route** with a scoped API key and make it safe to retry. The audit entry and the job commit together with your write, or not at all:
+
+```ts filename="app/api/notes/route.ts"
+import { db, gw, noteCreated, withApiKey, withIdempotency } from "@/lib/groundwork";
+
+export const POST = withApiKey(
+  ["notes:write"],
+  withIdempotency(
+    { scope: (_request, { apiKey }) => `apikey:${apiKey.id}` },
+    async (request, { apiKey }) => {
+      const { text } = await request.json();
+      const id = crypto.randomUUID();
+      await db.transaction(async (tx) => {
+        await gw.audit.record(
+          { actor: { type: "api_key", id: apiKey.id }, action: "note.create", metadata: { id, text } },
+          { tx },
+        );
+        await noteCreated.enqueue({ id }, { tx });
+      });
+      return Response.json({ id }, { status: 201 });
+    },
+  ),
+);
+```
+
+**4. Run jobs** from a cron route (Vercel Cron sends `CRON_SECRET` for you), or with `gw.jobs.work()` in a long-running process:
+
+```ts filename="app/api/jobs/route.ts"
+import { jobsRoute } from "groundwork/next";
+import { gw } from "@/lib/groundwork";
+
+export const GET = jobsRoute(gw, { secret: process.env.CRON_SECRET ?? "" });
+export const POST = GET;
+```
+
+**5. Create a key** once, from a script or your admin UI, and call the route. A retry with the same `Idempotency-Key` gets the first response back:
+
+```ts
+const { key } = await gw.apiKeys.create({ name: "My CLI", scopes: ["notes:write"] });
+```
+
+```sh
+curl -X POST http://localhost:3000/api/notes -H "Authorization: Bearer $KEY"   -H "Idempotency-Key: $(uuidgen)" -d '{"text":"Hello"}'
+```
+
+[`examples/next-app`](examples/next-app) uses every module, with rate limits, a schedule and an audit-log endpoint. CI builds both it and this quickstart in a fresh `create-next-app` project, then runs requests against them.
+
 ## What's inside
 
 | Module | Import | Status |
@@ -45,8 +156,8 @@ groundwork takes a different shape:
 | [Audit log](docs/audit.md) with diffs, redaction and keyset pagination | `groundwork/audit` | Built, unreleased |
 | [Scoped API keys](docs/api-keys.md) with rotation, CIDR allowlists and per-key limits | `groundwork/api-keys` | Built, unreleased |
 | [Background jobs](docs/jobs.md) and schedules, with leases and jittered retries | `groundwork/jobs` | Built, unreleased |
-| Idempotency keys | `groundwork/idempotency` | Planned (Phase 5) |
-| Next.js route helpers | `groundwork/next` | Planned (Phase 5) |
+| [Idempotency keys](docs/idempotency.md) with stored responses, per the IETF draft | `groundwork/idempotency` | Built, unreleased |
+| [Next.js route helpers](docs/next.md): API keys, rate limits, idempotency, a jobs cron route | `groundwork/next` | Built, unreleased |
 | Test helpers for your app | `groundwork/testing` | Started (`createTestClock`) |
 
 ## Requirements
@@ -54,6 +165,7 @@ groundwork takes a different shape:
 - PostgreSQL 16 or newer.
 - `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`.
 - Node.js 22+ or Bun 1.4+. ESM only.
+- For `groundwork/next`: nothing extra. It never imports `next`; CI tests it with Next.js 16.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
 - Optional: Redis, only if you choose the Redis rate-limit store (tested with Redis 8, ioredis 6 and node-redis 6).
 
