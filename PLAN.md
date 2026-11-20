@@ -375,11 +375,11 @@ Don't start the next phase until I approve.
 - [x] Publish `0.1.0` with provenance *(published 2026-11-20 as `@vantedev/groundwork`, by hand and so without provenance; later releases get provenance through trusted publishing)*
 
 ### Phase 7: Dogfooding, then 1.0
-- [ ] Faultline: swap the in-memory limiter (this fixes the multi-instance problem)
-- [ ] vante.app: rate limiting, audit, API keys, jobs
-- [ ] VaultDrop: rate limiting, jobs, idempotency
-- [ ] bubblehouse-dk: audit, mail outbox through jobs
-- [ ] For each app, record the lines removed and any API pain it exposed, and fix that pain in groundwork, not in the app
+- [x] Faultline: swap the in-memory limiter (this fixes the multi-instance problem). *On `feat/groundwork`, not merged or pushed.*
+- [x] vante.app: rate limiting, audit, API keys, jobs. *On `feat/groundwork`, not merged or pushed.*
+- [x] VaultDrop: rate limiting, jobs, idempotency. *On `feat/groundwork`, not merged or pushed.*
+- [ ] bubblehouse-dk: audit, mail outbox through jobs. *Not done: it got rate limiting instead (see the 2026-11-20 log). Waiting for the owner's decision.*
+- [x] For each app, record the lines removed and any API pain it exposed, and fix that pain in groundwork, not in the app. *Recorded below; fixed in 0.2.0, which isn't released yet. Hookline's web API got rate limiting too.*
 - **1.0 when:** at least 2 apps run it in production, there are no open correctness bugs, and the public API is documented and stable.
 
 ## 8. Reference code (sibling folders)
@@ -411,6 +411,8 @@ Read these before writing each module. Keep what works and fix what section 1 ca
 - **Redis adapter for rate limiting** in v1 or later? Hookline uses Redis today. **Decided 2026-11-19: in v1.**
 - **Minimum Postgres version.** **Decided 2026-11-19: 16. CI tests 16 and 18.**
 - **Default table prefix:** `gw_`, or plain names (`rate_limits`) that might clash with tables the apps already have? **Decided 2026-11-19: `gw_`.**
+- **Faultline and PostgreSQL 15** (open, 2026-11-20). Faultline's docs promise PG15+, but groundwork's minimum is 16. On PG15 groundwork passes 158 of 159 tests; only the harness's version check fails. Either Faultline raises its minimum to 16, or groundwork adds 15 to CI and supports it.
+- **bubblehouse-dk's audit log and mail outbox** (open, 2026-11-20). Not moved (see the log). Move them now as they are, wait for a column mapping and a retry ladder in groundwork, or leave them as the app's own code?
 
 ## 10. Decisions log
 
@@ -654,6 +656,34 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
 - 2026-11-20: At the owner's request, every commit message was rewritten to Conventional Commits, without "Phase" wording or co-author trailers. The GitHub repository was then deleted and recreated, so its cached contributor list starts fresh. Claude Code files (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `PROMPT.md`) are ignored by git.
 - 2026-11-20: Published `@vantedev/groundwork@0.1.0` by hand, confirmed with 2FA in the browser. Its shasum (`7b638162…`) matches the tarball built and dry-run from `180427c`, and installing it from npm into an empty project loads all 9 subpaths on Node 22. While npm processed the new package, it showed a placeholder version `0.0.0-stage` ("Temporary package placeholder for staged publishing"); `latest` then moved to 0.1.0. `v0.1.0` is tagged on `180427c`.
 - 2026-11-20: The release workflow's run for `v0.1.0` failed in the smoke test before the (skipped) publish step: `npm@latest` is now npm 12, whose `npm pack --json` prints an object keyed by package name instead of an array. The smoke and example scripts now read both shapes (tested under npm 12 and Node 22's npm), and the workflow pins `npm@11`, which still has trusted publishing. The `v0.1.0` run stays red; the tag isn't moved.
+
+- 2026-11-20 (Phase 7): groundwork runs in all five apps, each on a `feat/groundwork` branch. Nothing is merged or pushed, and old tables are kept until a later migration drops them. Lines are app code without tests, migrations, docs or lockfiles (added/removed):
+  - **Faultline** (+60/−30): its in-memory `Map` limiter is now `gw.rateLimit` in Postgres, so limits hold across instances. A separate commit moves Next.js to 16.4.6: `next build` refuses 16.4.3, which has advisories.
+  - **vante.app** (+551/−561): rate limiting, API keys (moved with `legacyHash`, so no key is re-issued), audit and jobs, with data migrations for keys, audit entries and pending jobs, each tested.
+  - **VaultDrop** (+307/−260): rate limiting (Redis optional), idempotency through `run()` and its four jobs as schedules. Also fixed the admin page's rate-limit panel, which still read the old table. Checked in a production build: the worker runs every schedule, and the cron route answers as before. A separate commit moves Next.js to 16.4.6.
+  - **bubblehouse-dk** (+67/−31): `rateLimit()` keeps its nine callers and the password-reset limit. Checked in a production build: 429 after 120 requests.
+  - **Hookline** (+43/−38): the REST API's Redis token bucket is groundwork's token-bucket rule on `redisStore`. If Redis is down it now keeps counting in memory instead of failing open. The Go edge and worker read `api_key` and `idempotency_key` themselves, so those stay Hookline's.
+
+  The mechanism code went away (the limiter SQL and Lua, the queue's claim and retry logic, idempotency's state machine). Glue kept the totals flat: lazy instances, pino adapters, wrappers that keep each app's signatures, and rule caches. 0.2.0 removes most of that glue.
+- 2026-11-20: API pain found while dogfooding, and what 0.2.0 does about it:
+  - **The secret was needed at construction.** Four apps wrapped groundwork in a lazy getter (it isn't set during `next build`), and Faultline's worker, which has no secret, skipped rate-limit cleanup. Fixed: `secret` can be a function, called once on first use.
+  - **verify only returned headers.** vante.app keeps `X-RateLimit-*` and parsed the numbers back out. Fixed: `rateLimit` and `quota` in the result.
+  - **No offsets in audit queries.** vante.app and bubblehouse-dk have numbered pages; vante.app read the table directly. Fixed: `query({ offset })`, up to 100,000, as the 2026-11-19 entry left open.
+  - **Schedule runs leaked the `schedule:` prefix** into VaultDrop's job pages. Fixed: `list({ schedule })` and a `schedule` field on records.
+  - **pino needs its arguments swapped**; VaultDrop and bubblehouse-dk each wrote the adapter. Fixed: `pinoLogger()`.
+  - **Docs only:** renaming table exports that collide with the app's own (`import * as tables` picks up the app's `auditLog`); defining rules per request when the limit varies (three apps cached rules in a `Map` because the docs said "once, at module scope"); reusing an app secret is safe; an external cron on the same period as a schedule runs it only every other time.
+  - **Not fixed, for later:**
+    - `db` must exist at construction, but VaultDrop's `getDb()` is async, so it keeps one instance per connection.
+    - `run()`'s `Jsonify<T>` needs a cast for a generic `T`.
+    - bubblehouse-dk's audit table can't move without renaming columns at every reader, and `gw_audit_log` ids are identities, so its idempotent Mongo import would duplicate entries. A column mapping or explicit ids would make that move cheap.
+    - Its outbox needs a fixed retry ladder, which `backoff` can't express.
+    - Ticks are due `every` after the last one. A small tolerance, or a fixed grid, would make cron-driven schedules keep time.
+- 2026-11-20: **bubblehouse-dk departs from the checklist.** Its audit log has six readers and three direct writers (two of them scripts that can't import `server-only` code), and its Mongo import writes ids of its own. Moving it would add code, change ids and lose the import's idempotency, for no new capability. Its mail outbox sends inline after payments, injects senders and a clock in tests, and retries on a fixed ladder (30 s, 2 min, 10 min, 30 min, then hourly). In a live shop's payment mail, I didn't want to change that behaviour without asking. It got rate limiting instead. Both moves are still open (section 9).
+- 2026-11-20: Things noticed in the apps, not fixed (they aren't groundwork's):
+  - Faultline's e2e "resolves and reopens several issues" fails on its main too: its events lack the `timestamp` its schema requires.
+  - bubblehouse-dk's `bun audit` shows a dev-only esbuild advisory through drizzle-kit.
+  - Faultline's docs promise PostgreSQL 15+. groundwork passes 158 of 159 tests on PG15; only the harness's version check fails. The supported range is an open decision in section 9.
+- 2026-11-20: 0.2.0 is versioned (`22eb535`), with all 535 tests and the smoke test passing. It isn't tagged or pushed yet; the release waits for the owner. Once it's out, the apps can drop their glue: lazy getters, logger adapters, rule maps, vante.app's header parsing and VaultDrop's prefix handling.
 
 ## 11. Alternatives check (2026-11-19)
 
