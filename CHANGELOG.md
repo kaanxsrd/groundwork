@@ -1,5 +1,16 @@
 # @vantedev/groundwork
 
+## 0.3.0
+
+### Minor Changes
+
+- f2b0df8: Jobs and schedules take a fixed retry ladder: `backoff: { delays: ["30s", "2m", "10m", "30m", "1h"] }`. After the n-th failed attempt the job waits the n-th delay exactly, with no jitter, and once the list runs out the last delay repeats. It's checked when the job is defined: 1 to 100 valid durations, and not together with `base` or `max`. `BackoffOptions` is now a union of the two forms, so an interface that extended it needs to become a type.
+- 392e465: Schedules keep to a grid and tolerate a caller that's slightly early. **This changes when schedules run:**
+  
+  - The next tick is the previous slot plus `every`, not the time the last tick ran plus `every`. Poll lag no longer adds up: a `"1m"` schedule under a worker polling every 5 seconds used to drift to roughly one tick every 60–65 seconds.
+  - A tick is due up to `min(every / 10, 5s)` early. A cron that calls `runOnce` every minute, a moment before a `"1m"` schedule's slot, used to run it only every other minute. It now runs every time.
+  - As before, missed slots aren't replayed: after an outage the next tick runs at once, and the grid restarts from there. `trigger(name)` restarts the grid too.
+
 ## 0.2.0
 
 ### Minor Changes

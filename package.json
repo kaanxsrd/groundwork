@@ -1,6 +1,6 @@
 {
   "name": "@vantedev/groundwork",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Postgres-only, Drizzle-native building blocks for rate limiting, audit logs, scoped API keys, background jobs and idempotency keys.",
   "license": "MIT",
   "author": "Vante",
