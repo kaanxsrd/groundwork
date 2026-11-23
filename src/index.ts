@@ -66,7 +66,10 @@ export interface GroundworkOptions<
   TAuditEntity extends string = string,
   TScopes extends Record<string, string> = Record<never, string>,
 > {
-  /** Your Drizzle Postgres database, from any driver. */
+  /**
+   * Your Drizzle Postgres database, from any driver. groundwork only calls `execute()`, so a
+   * database opened asynchronously works as `{ execute: async (q) => (await getDb()).execute(q) }`.
+   */
   readonly db: GroundworkDatabase;
   /**
    * Your groundwork tables, usually `import * as tables from "./db/schema/groundwork"`.

@@ -94,6 +94,20 @@ const gw = createGroundwork({ db, tables, secret, logger: pinoLogger(logger) });
 
 By default warnings and errors go to the console with a `[groundwork]` prefix. Log context never contains secrets, raw keys or raw subjects.
 
+## The database
+
+groundwork only ever calls `db.execute(query)`, so `db` can be any Drizzle Postgres database or transaction, from any driver (`postgres`, `pg`, Neon, PGlite…). That also covers a database your app opens asynchronously, such as PGlite that migrates before first use, or a pool created on the first request. Pass an object that waits for it, and create `gw` once, at module scope:
+
+```ts
+const gw = createGroundwork({
+  db: { execute: async (query) => (await getDb()).execute(query) },
+  tables,
+  secret: () => env().GROUNDWORK_SECRET,
+});
+```
+
+The `tx` options (`record(event, { tx })`, `enqueue(payload, { tx })`) take your transaction object as it is.
+
 ## Clocks
 
 Modules that depend on time take a `Clock`, an object with `now(): Date`. Without one, each module uses the most trustworthy clock it has: rate limiting asks Postgres (or Redis), so app instances with skewed clocks still agree. In tests, inject a clock you control:

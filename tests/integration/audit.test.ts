@@ -471,6 +471,25 @@ describe("prune", () => {
 });
 
 describe("createGroundwork", () => {
+  test("works with a database the app opens asynchronously", async () => {
+    let opened = 0;
+    const getDb = async () => {
+      opened++;
+      return database.current.db;
+    };
+    const gw = createGroundwork({
+      db: { execute: async (query) => (await getDb()).execute(query) },
+      tables: { auditLog },
+      secret: () => TEST_SECRET,
+      audit: { actions: ["invoice.send"] },
+    });
+    expect(opened).toBe(0);
+    const requestId = unique("lazy-db");
+    await gw.audit.record({ actor: { type: "system" }, action: "invoice.send", requestId });
+    expect((await gw.audit.query({ requestId })).entries).toHaveLength(1);
+    expect(opened).toBeGreaterThan(0);
+  });
+
   test("gw.audit records and queries with the app's actions", async () => {
     const gw = createGroundwork({
       db: database.current.db,
