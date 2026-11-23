@@ -35,7 +35,7 @@ npm can only connect a workflow to a package that already exists, so the first r
 5. Connect the workflow for later releases: **the package → Settings → Trusted publishing → GitHub Actions**, with repository `kaanxsrd/groundwork`, workflow `release.yml` and environment `npm`.
 6. Under **Settings → Publishing access**, choose *Require two-factor authentication and disallow tokens*. From then on only the workflow, or you with 2FA, can publish.
 
-A token works too: with a short-lived granular token stored as the `NPM_TOKEN` secret of the `npm` environment, the workflow can publish the first release itself, with provenance. Delete the secret and revoke the token once trusted publishing is set up.
+The workflow only uses trusted publishing: it reads no `NPM_TOKEN`, so a token left in the `npm` environment does nothing. Check the connection with `npm trust list @vantedev/groundwork`. The repository, the workflow file (`release.yml`, the bare name) and the environment (`npm`) must match exactly.
 
 ## Every release
 
@@ -58,6 +58,7 @@ Until 1.0, a minor version (0.2.0) can break the API, and a patch (0.1.1) never 
 
 | Situation | What to do |
 | --- | --- |
+| Publishing fails with `ENEEDAUTH` | The OIDC exchange failed. The workflow's last step prints npm's reason. Usually the trusted publisher doesn't match: check it with `npm trust list @vantedev/groundwork`, and fix it with `npm trust github @vantedev/groundwork --file release.yml --repo kaanxsrd/groundwork --env npm --allow-publish`. Then re-run the failed job from the run page; the tag stays. |
 | A release has a bug | Publish a fix as a new patch. Warn about the broken one: `npm deprecate @vantedev/groundwork@0.2.0 "Breaks X, use 0.2.1"`. |
 | Testing before everyone gets it | Publish with `npm publish --tag next`; testers install `@vantedev/groundwork@next`. `latest` is untouched. |
 | Something was published that mustn't be public | `npm unpublish @vantedev/groundwork@<version>` works within 72 hours if nothing depends on it. The version number can never be reused. If it contained a secret, rotate the secret anyway. |
