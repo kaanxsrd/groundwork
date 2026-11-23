@@ -102,6 +102,16 @@ result.replayed; // true when the function didn't run
 
 The result type says what JSON gives back: a `Date` is typed as a `string`. Pass `fingerprint` to have reuse for something else reported as `{ ok: false, reason: "mismatch" }`.
 
+Inside a generic helper, TypeScript can't work out what JSON makes of a type parameter, so `result.value` won't be assignable back to `T`. If you know `T` only holds strings, numbers, booleans, arrays and plain objects, it comes back unchanged. Cast it once, in the helper:
+
+```ts
+async function once<T extends Record<string, string | number>>(key: string, fn: () => Promise<T>) {
+  const result = await gw.idempotency.run({ scope: "jobs", key }, fn);
+  if (!result.ok) throw new Error(result.reason);
+  return result.value as unknown as T; // T is JSON already: nothing changes on the round trip
+}
+```
+
 `run()` is also how you store less than the response. VaultDrop stores only a new secret's id and expiry, and works out the receipt token, a credential, again on each replay:
 
 ```ts
