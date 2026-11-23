@@ -375,11 +375,11 @@ Don't start the next phase until I approve.
 - [x] Publish `0.1.0` with provenance *(published 2026-11-20 as `@vantedev/groundwork`, by hand and so without provenance; later releases get provenance through trusted publishing)*
 
 ### Phase 7: Dogfooding, then 1.0
-- [x] Faultline: swap the in-memory limiter (this fixes the multi-instance problem). *On `feat/groundwork`, not merged or pushed.*
-- [x] vante.app: rate limiting, audit, API keys, jobs. *On `feat/groundwork`, not merged or pushed.*
-- [x] VaultDrop: rate limiting, jobs, idempotency. *On `feat/groundwork`, not merged or pushed.*
+- [x] Faultline: swap the in-memory limiter (this fixes the multi-instance problem). *Merged 2026-11-20.*
+- [x] vante.app: rate limiting, audit, API keys, jobs. *Merged 2026-11-20.*
+- [x] VaultDrop: rate limiting, jobs, idempotency. *Merged 2026-11-20.*
 - [ ] bubblehouse-dk: audit, mail outbox through jobs. *Not done: it got rate limiting instead (see the 2026-11-20 log). Waiting for the owner's decision.*
-- [x] For each app, record the lines removed and any API pain it exposed, and fix that pain in groundwork, not in the app. *Recorded below; fixed in 0.2.0, which isn't released yet. Hookline's web API got rate limiting too.*
+- [x] For each app, record the lines removed and any API pain it exposed, and fix that pain in groundwork, not in the app. *Recorded below; fixed in 0.2.0 (released 2026-11-23). Hookline's web API got rate limiting too.*
 - **1.0 when:** at least 2 apps run it in production, there are no open correctness bugs, and the public API is documented and stable.
 
 ## 8. Reference code (sibling folders)
@@ -683,6 +683,14 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - bubblehouse-dk's `bun audit` shows a dev-only esbuild advisory through drizzle-kit.
   - Faultline's docs promise PostgreSQL 15+. groundwork passes 158 of 159 tests on PG15; only the harness's version check fails. The supported range is an open decision in section 9.
 - 2026-11-20: 0.2.0 is versioned (`22eb535`), with all 535 tests and the smoke test passing. It isn't tagged or pushed yet; the release waits for the owner. Once it's out, the apps can drop their glue: lazy getters, logger adapters, rule maps, vante.app's header parsing and VaultDrop's prefix handling.
+- 2026-11-20: The owner merged all five apps' `feat/groundwork` branches (Faultline #1, vante.app #2, VaultDrop #15, bubblehouse-dk #3, Hookline #1). CI is green on every app's `main`.
+- 2026-11-23: Hookline is the first app running groundwork in production (REST API rate limits), deployed on Railway from `0189635`. Getting there fixed three CI problems unrelated to groundwork: a new Go advisory in `klauspost/compress`, production images still on Go 1.27.3, and GoReleaser picking up the `deployed/production` tag as a version. It also fixed the deploy's Migrate check, which read the logs before the container had printed "Migrations applied.". Faultline's `main` CI was red since 2026-11-04 because an e2e test sent events without the required `timestamp`; that's fixed too.
+- 2026-11-23: **Published 0.2.0** through trusted publishing, with provenance (shasum `6e472450…`). It took three attempts:
+  1. `ENEEDAUTH`. npm logs why the OIDC exchange failed only at verbose level, and the workflow still passed an empty `NODE_AUTH_TOKEN` from the deleted `NPM_TOKEN` secret.
+  2. With the owner's approval, `v0.2.0` moved from `34a675f` to `9f6593e`, which drops the token and prints npm's `oidc` log lines on failure. Nothing had been published under the old tag. The exchange then said `OIDC token exchange error - package not found`: no trusted-publisher entry on npmjs.com matched the run.
+  3. The owner fixed the entry (repository `kaanxsrd/groundwork`, workflow `release.yml`, environment `npm`). Re-running the job published it.
+
+  A fresh install loads all 9 subpaths, and `npm audit signatures` verifies the attestation. `docs/releasing.md` now covers `ENEEDAUTH` and how to check the trusted publisher.
 
 ## 11. Alternatives check (2026-11-19)
 
