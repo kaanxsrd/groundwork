@@ -92,6 +92,7 @@
     "db:down": "docker compose down",
     "db:generate": "drizzle-kit generate",
     "db:drift": "bun scripts/check-migrations.ts",
+    "docs:api": "cd tools/api-docs && bun install --frozen-lockfile && bun run build",
     "smoke": "bun run build && publint --strict && attw --pack . --profile esm-only && node scripts/smoke.mjs",
     "example": "node scripts/example.mjs",
     "changeset": "changeset"

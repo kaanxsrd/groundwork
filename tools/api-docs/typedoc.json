@@ -1,0 +1,32 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "@vantedev/groundwork",
+  "entryPoints": [
+    "../../src/index.ts",
+    "../../src/schema/index.ts",
+    "../../src/rate-limit/index.ts",
+    "../../src/audit/index.ts",
+    "../../src/api-keys/index.ts",
+    "../../src/jobs/index.ts",
+    "../../src/idempotency/index.ts",
+    "../../src/next/index.ts",
+    "../../src/testing/index.ts"
+  ],
+  "tsconfig": "./tsconfig.json",
+  "out": "../../docs/api",
+  "plugin": ["typedoc-plugin-markdown"],
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "disableSources": true,
+  "hidePageHeader": true,
+  "hideBreadcrumbs": true,
+  "outputFileStrategy": "modules",
+  "entryFileName": "README.md",
+  "validation": {
+    "notExported": false,
+    "invalidLink": true,
+    "notDocumented": false
+  },
+  "treatValidationWarningsAsErrors": false
+}

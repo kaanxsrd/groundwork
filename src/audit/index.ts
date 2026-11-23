@@ -16,7 +16,7 @@
  * });
  * ```
  *
- * @module
+ * @module @vantedev/groundwork/audit
  */
 export { type AuditLogOptions, createAuditLog } from "./audit-log.ts";
 export { type AuditDiff, type DiffOptions, diff } from "./diff.ts";

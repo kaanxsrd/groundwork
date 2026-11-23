@@ -21,7 +21,7 @@
  * export const POST = GET;
  * ```
  *
- * @module
+ * @module @vantedev/groundwork/next
  */
 export { type ClientIpOptions, getClientIp, type TrustProxy } from "./client-ip.ts";
 export { type JobsRouteOptions, jobsRoute } from "./jobs-route.ts";

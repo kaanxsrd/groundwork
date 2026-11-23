@@ -29,6 +29,13 @@ jobs:
       - run: bun run test:unit
       - name: Migrations are up to date with the fixture schema
         run: bun run db:drift
+      - name: The API reference is up to date with the source
+        run: |
+          bun run docs:api
+          if [ -n "$(git status --porcelain -- docs/api)" ]; then
+            git status --short -- docs/api
+            echo "::error::docs/api is out of date: run 'bun run docs:api' and commit the result"; exit 1
+          fi
 
   integration:
     # Oldest and newest supported Postgres majors, each with both drivers.

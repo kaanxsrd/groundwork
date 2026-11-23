@@ -16,7 +16,7 @@
  * if (!auth.ok) return auth.response;
  * ```
  *
- * @module
+ * @module @vantedev/groundwork/api-keys
  */
 export { type ApiKeysOptions, createApiKeys } from "./api-keys.ts";
 export { API_KEY_AUDIT_ACTIONS, type ApiKeyAuditAction, apiKeyAuditEvent } from "./audit.ts";

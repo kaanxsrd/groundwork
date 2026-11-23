@@ -1,0 +1,14 @@
+{
+  "name": "groundwork-api-docs",
+  "private": true,
+  "description": "Generates docs/api/ from groundwork's source with TypeDoc. TypeDoc needs TypeScript's JavaScript API, which TypeScript 7 doesn't have, so it runs here with TypeScript 6.",
+  "type": "module",
+  "scripts": {
+    "build": "typedoc --options typedoc.json"
+  },
+  "devDependencies": {
+    "typedoc": "0.28.20",
+    "typedoc-plugin-markdown": "4.14.1",
+    "typescript": "6.0.3"
+  }
+}

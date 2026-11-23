@@ -11,5 +11,6 @@
 - [Testing your app](testing.md): real Postgres, the test clock, running jobs and calling routes in tests.
 - [Migrating from hand-rolled tables](migrating.md): what to do with old data, module by module and app by app.
 - [Releasing](releasing.md): for maintainers, how a version gets to npm with provenance.
+- [API reference](api/README.md): every export of every entry point, with its options and types. Generated from the source with `bun run docs:api`.
 
 [`examples/next-app`](../examples/next-app) shows every module in one app.

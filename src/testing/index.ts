@@ -1,7 +1,7 @@
 /**
  * `@vantedev/groundwork/testing`: helpers for testing apps that use groundwork.
  *
- * @module
+ * @module @vantedev/groundwork/testing
  */
 import type { Clock } from "../internal/clock.ts";
 import { type Duration, parseDuration } from "../internal/duration.ts";

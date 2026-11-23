@@ -19,7 +19,7 @@
  * return gw.idempotency.handle(request, { scope: `apikey:${auth.key.id}` }, () => createPost());
  * ```
  *
- * @module
+ * @module @vantedev/groundwork
  */
 import { createApiKeys } from "./api-keys/api-keys.ts";
 import {

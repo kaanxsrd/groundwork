@@ -13,7 +13,7 @@
  * migration. groundwork never runs DDL itself. Only exported tables are created, so destructure
  * just the ones you need.
  *
- * @module
+ * @module @vantedev/groundwork/schema
  */
 import type { PgSchema } from "drizzle-orm/pg-core";
 import { type ApiKeysTable, buildApiKeysTable } from "./api-keys.ts";

@@ -22,7 +22,7 @@
  * await jobs.work({ concurrency: 4, signal });
  * ```
  *
- * @module
+ * @module @vantedev/groundwork/jobs
  */
 
 export type { StandardSchemaV1 } from "../internal/standard-schema.ts";

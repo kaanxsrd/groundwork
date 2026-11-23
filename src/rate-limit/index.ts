@@ -10,7 +10,7 @@
  * export const apiLimit = limiter.rule({ name: "api", algorithm: "token-bucket", rate: 10, per: "1s", burst: 120 });
  * ```
  *
- * @module
+ * @module @vantedev/groundwork/rate-limit
  */
 export { createRateLimiter, type RateLimiterOptions } from "./limiter.ts";
 export { type MemoryStore, type MemoryStoreOptions, memoryStore } from "./memory-store.ts";

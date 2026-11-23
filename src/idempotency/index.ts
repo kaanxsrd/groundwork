@@ -17,7 +17,7 @@
  * const result = await idempotency.run({ scope: "stripe", key: event.id }, () => fulfil(event));
  * ```
  *
- * @module
+ * @module @vantedev/groundwork/idempotency
  */
 export {
   IDEMPOTENCY_KEY_HEADER,

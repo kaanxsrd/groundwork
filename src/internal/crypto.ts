@@ -6,7 +6,7 @@ import {
 } from "node:crypto";
 import { GroundworkError } from "./errors.ts";
 
-/** The app secret, as a string (UTF-8) or raw bytes. It must be at least {@link MIN_SECRET_BYTES} long. */
+/** The app secret, as a string (UTF-8) or raw bytes. It must be at least 32 bytes long. */
 export type Secret = string | Uint8Array;
 
 /**
