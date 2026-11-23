@@ -691,6 +691,13 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   3. The owner fixed the entry (repository `kaanxsrd/groundwork`, workflow `release.yml`, environment `npm`). Re-running the job published it.
 
   A fresh install loads all 9 subpaths, and `npm audit signatures` verifies the attestation. `docs/releasing.md` now covers `ENEEDAUTH` and how to check the trusted publisher.
+- 2026-11-23: All five apps moved to 0.2.0, each on a `refactor/groundwork-0.2` branch, and pushed. They dropped the lazy getters, pino adapters, rule maps, vante.app's header parsing and VaultDrop's prefix handling. Faultline's worker now runs rate-limit cleanup without the secret. Each app's tests pass, and behaviour is unchanged.
+- 2026-11-23: For 0.3.0, three items from the "not fixed, for later" list:
+  - **Retry ladders:** `backoff: { delays: [...] }`, for bubblehouse-dk's outbox schedule (30 s, 2 min, 10 min, 30 min, then hourly). The owner chose not to move that outbox yet.
+  - **Schedule timing:** ticks keep to a grid and are due up to `min(every / 10, 5s)` early. Missed slots aren't replayed. The owner chose this timing change over keeping the docs workaround.
+  - **An async database:** documented, with no API change. groundwork only calls `execute()`, so `{ execute: async (q) => (await getDb()).execute(q) }` works.
+
+  Still open: `run()`'s `Jsonify<T>` cast for generic results; an audit column mapping or explicit ids for bubblehouse-dk's audit log; Faultline and PostgreSQL 15.
 
 ## 11. Alternatives check (2026-11-19)
 
