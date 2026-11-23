@@ -378,7 +378,7 @@ Don't start the next phase until I approve.
 - [x] Faultline: swap the in-memory limiter (this fixes the multi-instance problem). *Merged 2026-11-20.*
 - [x] vante.app: rate limiting, audit, API keys, jobs. *Merged 2026-11-20.*
 - [x] VaultDrop: rate limiting, jobs, idempotency. *Merged 2026-11-20.*
-- [ ] bubblehouse-dk: audit, mail outbox through jobs. *Not done: it got rate limiting instead (see the 2026-11-20 log). Waiting for the owner's decision.*
+- [x] bubblehouse-dk: audit, mail outbox through jobs. *Decided 2026-11-23: neither moves; bubblehouse-dk keeps both. It uses groundwork's rate limiting instead (see the log).*
 - [x] For each app, record the lines removed and any API pain it exposed, and fix that pain in groundwork, not in the app. *Recorded below; fixed in 0.2.0 (released 2026-11-23). Hookline's web API got rate limiting too.*
 - **1.0 when:** at least 2 apps run it in production, there are no open correctness bugs, and the public API is documented and stable.
 
@@ -411,8 +411,8 @@ Read these before writing each module. Keep what works and fix what section 1 ca
 - **Redis adapter for rate limiting** in v1 or later? Hookline uses Redis today. **Decided 2026-11-19: in v1.**
 - **Minimum Postgres version.** **Decided 2026-11-19: 16. CI tests 16 and 18.**
 - **Default table prefix:** `gw_`, or plain names (`rate_limits`) that might clash with tables the apps already have? **Decided 2026-11-19: `gw_`.**
-- **Faultline and PostgreSQL 15** (open, 2026-11-20). Faultline's docs promise PG15+, but groundwork's minimum is 16. On PG15 groundwork passes 158 of 159 tests; only the harness's version check fails. Either Faultline raises its minimum to 16, or groundwork adds 15 to CI and supports it.
-- **bubblehouse-dk's audit log and mail outbox** (open, 2026-11-20). Not moved (see the log). Move them now as they are, wait for a column mapping and a retry ladder in groundwork, or leave them as the app's own code?
+- **Faultline and PostgreSQL 15.** Faultline's docs promised PG15+, but groundwork's minimum is 16. **Decided 2026-11-23: Faultline requires 16.** Its images already ran 17; only its docs changed.
+- **bubblehouse-dk's audit log and mail outbox.** **Decided 2026-11-23: both stay bubblehouse-dk's own.** The outbox works and sends a live shop's payment mail. The audit log would need renamed columns at six readers, new ids and an import that duplicates on re-runs, for no new capability. 0.3.0's retry ladder would cover the outbox's retry schedule if it ever moves.
 
 ## 10. Decisions log
 
@@ -698,6 +698,7 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - **An async database:** documented, with no API change. groundwork only calls `execute()`, so `{ execute: async (q) => (await getDb()).execute(q) }` works.
 
   Still open: `run()`'s `Jsonify<T>` cast for generic results; an audit column mapping or explicit ids for bubblehouse-dk's audit log; Faultline and PostgreSQL 15.
+- 2026-11-23: **Published 0.3.0** (first try, trusted publishing, provenance). VaultDrop's and vante.app's branches moved to it, as the two apps with schedules. The rest only rate-limit, which 0.3.0 doesn't change. The `Jsonify<T>` cast is documented rather than changed: no signature can avoid it without claiming JSON keeps `Date`s. The owner decided the two open items: Faultline requires PostgreSQL 16 (docs only), and bubblehouse-dk keeps its audit log and outbox. Nothing from Phase 7's dogfooding is left open.
 
 ## 11. Alternatives check (2026-11-19)
 
