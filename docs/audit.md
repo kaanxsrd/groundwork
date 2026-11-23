@@ -96,7 +96,7 @@ diff(before, after, { ignore: ["updatedAt"] });
 
 ## Redaction
 
-Matching keys in `changes` and `metadata` are replaced with `"[redacted]"` at any depth, including inside arrays and inside `diff()` tuples, before the entry is sent to the database.
+Matching keys in `changes` and `metadata` are replaced with `"[redacted]"` (exported as `REDACTED`, for tests and display code) at any depth, including inside arrays and inside `diff()` tuples, before the entry is sent to the database.
 
 - **Defaults:** `password`, `passwd`, `secret`, `token`, `apiKey`, `authorization`, `cookie`, `privateKey` (exported as `DEFAULT_REDACT`).
 - **Matching:** a string rule matches any key that *contains* it, ignoring case, `_` and `-`. So `token` covers `accessToken`, `refresh_token` and `X-Session-Token`. A `RegExp` rule is tested against the raw key: `/^ssn$/i`.

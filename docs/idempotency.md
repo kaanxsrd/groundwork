@@ -145,6 +145,11 @@ createIdempotency({ db, table: idempotencyKeys, secret, ttl, lease, clock, logge
 
 Keys must be 8 to 255 visible ASCII characters. The draft makes the header a Structured Field string (`Idempotency-Key: "8e03…"`); most clients send it bare (`Idempotency-Key: 8e03…`). Both work.
 
+The module exports what `handle()` uses, for routes that read the key themselves (before `run()`, say):
+
+- `IDEMPOTENCY_KEY_HEADER` (`"Idempotency-Key"`) and `REPLAYED_HEADER` (`"Idempotent-Replayed"`), the request and replay header names;
+- `parseIdempotencyKey(value)`, which accepts both forms above and returns the key, or `null` when it isn't valid.
+
 ## Replacing VaultDrop's `withIdempotency`
 
 VaultDrop's `idempotency_keys` table has the same shape: scope, key, a body hash and the stored response. groundwork's version:

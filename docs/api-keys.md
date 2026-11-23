@@ -134,7 +134,7 @@ The counters' rows are named `<namespace>:key` and `<namespace>:key.daily`, and 
 
 ## Audit log
 
-With both modules wired through `createGroundwork`, every change is recorded as `api_key.create`, `api_key.update`, `api_key.rotate`, `api_key.suspend`, `api_key.reinstate`, `api_key.revoke` or `api_key.delete`. Each entry has entity `{ type: "api_key", id }`, the actor you pass, a summary naming the key and its prefix, and the changed fields for updates. Keys are never written. `gw.audit` accepts these actions without you listing them.
+With both modules wired through `createGroundwork`, every change is recorded as `api_key.create`, `api_key.update`, `api_key.rotate`, `api_key.suspend`, `api_key.reinstate`, `api_key.revoke` or `api_key.delete`. Each entry has entity `{ type: "api_key", id }`, the actor you pass, a summary naming the key and its prefix, and the changed fields for updates. Keys are never written. `gw.audit` accepts these actions without you listing them. They're exported as `API_KEY_AUDIT_ACTIONS`, for a standalone `createAuditLog()` or a filter such as `gw.audit.query({ action: API_KEY_AUDIT_ACTIONS })`.
 
 On their own:
 

@@ -27,7 +27,7 @@ groundworkTables({ prefix: "gw_", schema: undefined });
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `prefix` | `"gw_"` | Prepended to every table and index name: `gw_rate_limits`, `gw_rate_limits_expires_at_idx`. The default keeps groundwork's tables apart from yours, so a hand-rolled `rate_limits` table can live next to `gw_rate_limits` while you migrate. `""` gives plain names. Lower-case letters, digits and underscores only. |
+| `prefix` | `"gw_"` (exported as `DEFAULT_PREFIX`) | Prepended to every table and index name: `gw_rate_limits`, `gw_rate_limits_expires_at_idx`. The default keeps groundwork's tables apart from yours, so a hand-rolled `rate_limits` table can live next to `gw_rate_limits` while you migrate. `""` gives plain names. Lower-case letters, digits and underscores only. |
 | `schema` | none | A Postgres schema to put the tables in. Without it they go wherever your connection's `search_path` points, usually `public`. |
 
 When you set `schema`, **also export the returned `schema` object**. Without it drizzle-kit generates `CREATE TABLE "ops"."gw_rate_limits"` but no `CREATE SCHEMA`, and the migration fails on a fresh database:
