@@ -62,6 +62,8 @@ const MAX_LIST = 1_000;
 const PRUNE_BATCH = 5_000;
 const MAX_ERROR_LENGTH = 2_000;
 const MAX_BACKOFF_STEPS = 100;
+/** A schedule's tick may run this early at most (and never more than a tenth of `every`). */
+const SCHEDULE_EARLY_MAX_MS = 5_000;
 
 interface Handler {
   readonly type: string;
@@ -419,6 +421,11 @@ export function createJobs(options: JobsOptions): Jobs {
    * One statement per tick: move each due schedule's next run forward (a conditional update, so
    * of several instances only one wins) and enqueue its job. The job's dedupe key skips a tick
    * while the previous one is still pending or running.
+   *
+   * Ticks keep to a grid: the next run is the previous slot plus `every`, not now plus `every`,
+   * so a poll's lag doesn't add up. A tick is due up to `min(every / 10, 5s)` early, so a cron
+   * that calls a moment before the slot still runs it, instead of every other time. When whole
+   * slots were missed (nothing ran), the grid restarts from now, rather than catching up.
    */
   async function tickSchedules(): Promise<number> {
     if (schedules.size === 0) return 0;
@@ -429,9 +436,15 @@ export function createJobs(options: JobsOptions): Jobs {
         v (name, every, every_ms, max_attempts) as (values ${scheduleValues()}),
         due as (
           update ${schedulesTable} as s
-          set next_run_at = input.now + v.every_ms * interval '1 millisecond', last_run_at = input.now, updated_at = input.now
+          set next_run_at = case
+                when s.next_run_at + v.every_ms * interval '1 millisecond' > input.now
+                  then s.next_run_at + v.every_ms * interval '1 millisecond'
+                else input.now + v.every_ms * interval '1 millisecond'
+              end,
+            last_run_at = input.now, updated_at = input.now
           from input, v
-          where s.name = v.name and s.next_run_at <= input.now
+          where s.name = v.name
+            and s.next_run_at <= input.now + least(v.every_ms / 10, ${SCHEDULE_EARLY_MAX_MS}::float8) * interval '1 millisecond'
           returning s.name, v.max_attempts
         ),
         enqueued as (

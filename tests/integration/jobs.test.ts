@@ -204,6 +204,53 @@ describe("must-pass", () => {
     expect(runs[9]).toBe("2026-04-01T00:09:00.000Z");
   }, 30_000);
 
+  describe("timing", () => {
+    const T0 = Date.parse("2026-04-01T00:00:00Z");
+    /** Runs a "1m" (or other) schedule at each time, and returns when each tick ran. */
+    async function ticksAt(every: "1m" | "10s", offsetsMs: readonly number[]) {
+      const clock = createTestClock(new Date(T0).toISOString());
+      const jobs = jobsOn(database.current, { clock });
+      const name = unique("grid");
+      const ran: number[] = [];
+      jobs.schedule(name, { every }, ({ scheduledAt }) => {
+        ran.push(scheduledAt.getTime() - T0);
+      });
+      for (const offset of offsetsMs) {
+        clock.set(T0 + offset);
+        await jobs.runOnce();
+      }
+      const schedule = (await jobs.health()).schedules.find((s) => s.name === name);
+      return { ran, nextRunAt: (schedule?.nextRunAt.getTime() ?? 0) - T0 };
+    }
+
+    test("a cron that calls a moment early still runs every tick", async () => {
+      // A 1-minute cron, each call a few hundred ms off its minute.
+      const jitter = [0, -300, 200, -150, 400, -50, 0, -400, 100, -250, 300];
+      const { ran, nextRunAt } = await ticksAt(
+        "1m",
+        jitter.map((ms, minute) => minute * 60_000 + ms),
+      );
+      expect(ran).toHaveLength(11);
+      // The grid doesn't drift: the next slot is minute 11, whatever the calls' lag.
+      expect(nextRunAt).toBe(11 * 60_000);
+    });
+
+    test("a tick runs at most min(every / 10, 5s) early", async () => {
+      const minute = await ticksAt("1m", [0, 54_999, 55_000]);
+      expect(minute.ran).toEqual([0, 55_000]); // 5s early at most
+      expect(minute.nextRunAt).toBe(120_000);
+      const short = await ticksAt("10s", [0, 8_999, 9_000]);
+      expect(short.ran).toEqual([0, 9_000]); // a tenth of 10s
+      expect(short.nextRunAt).toBe(20_000);
+    });
+
+    test("missed slots aren't replayed; the grid restarts from now", async () => {
+      const { ran, nextRunAt } = await ticksAt("1m", [0, 10 * 60_000 + 1_000, 10 * 60_000 + 2_000]);
+      expect(ran).toEqual([0, 601_000]); // one tick for the outage, not ten
+      expect(nextRunAt).toBe(661_000);
+    });
+  });
+
   test("a schedule's runs are listed by its name", async () => {
     const clock = createTestClock("2026-04-01T00:00:00Z");
     const jobs = jobsOn(database.current, { clock });

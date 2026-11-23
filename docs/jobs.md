@@ -112,9 +112,8 @@ gw.jobs.schedule("security.scan", { every: "1m" }, async ({ scheduledAt }) => {
 - **Once per tick, cluster-wide:** a tick is claimed by moving the schedule's `next_run_at` forward with a conditional update, so of all your instances exactly one runs it.
 - **A tick runs as a job** (`schedule:<name>`), so it gets retries (3 by default), timeouts, history, `result` and health like any other job.
 - **No overlap:** a tick is skipped while the previous one is still pending or running.
-- **Timing:** a new schedule runs at once; after that it runs `every` after the last tick. `gw.jobs.trigger(name)` makes it due now. There's no cron syntax.
+- **Timing:** a new schedule runs at once; after that, ticks keep to a grid `every` apart, so lag from polling doesn't add up. A tick is due up to `min(every / 10, 5s)` early, so a cron that calls `runOnce` on the same period never misses one by arriving a moment before the slot. If whole slots are missed because nothing ran, the next tick runs at once and the grid restarts from there; missed ticks aren't replayed. `gw.jobs.trigger(name)` makes it due now and restarts the grid. There's no cron syntax.
 - **History:** `gw.jobs.list({ schedule: name })` lists a schedule's runs, newest first. Each record's `schedule` is the schedule's name (`null` for enqueued jobs). To run one now and read its result, `trigger(name)`, then `runOnce()`, then `list({ schedule: name, limit: 1 })`.
-- **Driven by an external cron:** a tick is due `every` after the last one ran, so a cron that calls `runOnce` every minute can arrive a moment before a `"1m"` schedule is due, and run it only every other minute. Give such schedules an `every` a little under the cron's period (`"50s"` for a 1-minute cron), or call `trigger(name)` from the cron route.
 
 With rate limiting set up, `createGroundwork` registers `groundwork.rate-limit-cleanup` (hourly `gw.rateLimit.cleanup()`) for you, and with idempotency keys, `groundwork.idempotency-cleanup`. They show in `health()` and `list()` next to yours. Turn them off with `jobs: { rateLimitCleanup: false, idempotencyCleanup: false }`.
 
