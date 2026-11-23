@@ -24,13 +24,29 @@ export interface ScheduleContext extends JobContext {
   readonly scheduledAt: Date;
 }
 
-/** Retries wait a random time between 0 and `min(max, base * 2^(attempt - 1))` ("full jitter"). */
-export interface BackoffOptions {
-  /** Defaults to `"30s"`. */
-  readonly base?: Duration | undefined;
-  /** Defaults to `"1h"`. */
-  readonly max?: Duration | undefined;
-}
+/**
+ * How long a failed job waits before its next attempt. Either exponential with full jitter (a
+ * random wait between 0 and `min(max, base * 2^(attempt - 1))`, the default), or a fixed ladder
+ * of `delays`.
+ */
+export type BackoffOptions =
+  | {
+      /** Defaults to `"30s"`. */
+      readonly base?: Duration | undefined;
+      /** Defaults to `"1h"`. */
+      readonly max?: Duration | undefined;
+      readonly delays?: undefined;
+    }
+  | {
+      /**
+       * After the n-th failed attempt, wait `delays[n - 1]`, exactly; once the list runs out, its
+       * last delay repeats. `["30s", "2m", "10m", "30m", "1h"]` retries after 30 seconds, then
+       * 2 minutes, and so on, then hourly. Up to 100 steps.
+       */
+      readonly delays: readonly Duration[];
+      readonly base?: undefined;
+      readonly max?: undefined;
+    };
 
 /** Why a job failed for good, passed to `onExhausted`. Never includes the payload. */
 export interface JobFailure {

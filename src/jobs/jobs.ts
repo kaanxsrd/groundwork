@@ -15,7 +15,7 @@ import {
   type JobSchedulesTable,
   type JobsTable,
 } from "../schema/jobs.ts";
-import { backoffDelayMs } from "./backoff.ts";
+import { backoffDelayMs, ladderDelayMs } from "./backoff.ts";
 import type {
   EnqueueOptions,
   EnqueueResult,
@@ -61,6 +61,7 @@ const SCHEDULE_PREFIX = "schedule:";
 const MAX_LIST = 1_000;
 const PRUNE_BATCH = 5_000;
 const MAX_ERROR_LENGTH = 2_000;
+const MAX_BACKOFF_STEPS = 100;
 
 interface Handler {
   readonly type: string;
@@ -72,6 +73,8 @@ interface Handler {
   readonly maxAttempts: number;
   readonly backoffBaseMs: number;
   readonly backoffMaxMs: number;
+  /** A fixed retry ladder, used instead of base and max when set. */
+  readonly backoffDelaysMs: readonly number[] | null;
   readonly timeoutMs: number | null;
   readonly priority: number;
   /** Set for schedule jobs: the schedule's name. */
@@ -248,7 +251,33 @@ export function createJobs(options: JobsOptions): Jobs {
         `onExhausted of job type "${type}" must be a function.`,
       );
     }
-    const backoff = (definition.backoff ?? {}) as { base?: unknown; max?: unknown };
+    const backoff = (definition.backoff ?? {}) as {
+      base?: unknown;
+      max?: unknown;
+      delays?: unknown;
+    };
+    let backoffDelaysMs: number[] | null = null;
+    if (backoff.delays !== undefined) {
+      if (backoff.base !== undefined || backoff.max !== undefined) {
+        throw new GroundworkError(
+          "invalid_config",
+          `backoff of "${type}" takes either delays, or base and max, not both.`,
+        );
+      }
+      if (
+        !Array.isArray(backoff.delays) ||
+        backoff.delays.length === 0 ||
+        backoff.delays.length > MAX_BACKOFF_STEPS
+      ) {
+        throw new GroundworkError(
+          "invalid_config",
+          `backoff.delays of "${type}" must be a list of 1 to ${MAX_BACKOFF_STEPS} durations, such as ["30s", "2m", "1h"].`,
+        );
+      }
+      backoffDelaysMs = backoff.delays.map((delay: unknown, index: number) =>
+        parseDuration(delay as Duration, { label: `backoff.delays[${index}] of "${type}"` }),
+      );
+    }
     const timeout = definition.timeout === undefined ? defaults.timeout : definition.timeout;
     const handler: Handler = {
       type,
@@ -265,6 +294,7 @@ export function createJobs(options: JobsOptions): Jobs {
       backoffMaxMs: parseDuration((backoff.max ?? defaults.max) as Duration, {
         label: `backoff.max of "${type}"`,
       }),
+      backoffDelaysMs,
       timeoutMs:
         timeout === false
           ? null
@@ -490,7 +520,9 @@ export function createJobs(options: JobsOptions): Jobs {
     const exhausted = permanent || job.attempts >= job.max_attempts;
     const delayMs = exhausted
       ? 0
-      : backoffDelayMs(job.attempts, handler.backoffBaseMs, handler.backoffMaxMs, random);
+      : handler.backoffDelaysMs
+        ? ladderDelayMs(job.attempts, handler.backoffDelaysMs)
+        : backoffDelayMs(job.attempts, handler.backoffBaseMs, handler.backoffMaxMs, random);
     const scheduleUpdate = handler.schedule
       ? sql`, touched as (
           update ${schedulesTable} set last_failure_at = ${now()}, last_error = ${lastError}::text, updated_at = ${now()}

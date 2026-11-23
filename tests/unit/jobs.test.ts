@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SQLWrapper } from "drizzle-orm";
 import { z } from "zod";
 import { validateWith } from "../../src/internal/standard-schema.ts";
+import { ladderDelayMs } from "../../src/jobs/backoff.ts";
 import { backoffDelayMs, createJobs, type JobHandle } from "../../src/jobs/index.ts";
 import { groundworkTables } from "../../src/schema/index.ts";
 
@@ -37,6 +38,31 @@ describe("backoffDelayMs", () => {
     const low = delays.filter((d) => d < 2_000).length;
     expect(low).toBeGreaterThan(800);
     expect(low).toBeLessThan(1_200);
+  });
+});
+
+describe("a backoff ladder", () => {
+  test("waits each step in turn, then repeats the last one", () => {
+    const ladder = [30_000, 120_000, 600_000];
+    expect([1, 2, 3, 4, 10].map((attempt) => ladderDelayMs(attempt, ladder))).toEqual([
+      30_000, 120_000, 600_000, 600_000, 600_000,
+    ]);
+    expect(ladderDelayMs(0, ladder)).toBe(30_000);
+  });
+
+  test("is checked when the job type is defined", () => {
+    const jobs = createJobs({ db: recordingDb().db, table, schedulesTable, logger: quiet });
+    const define = (backoff: unknown) => () =>
+      jobs.define(`ladder-${Math.random().toString(36).slice(2)}`, {
+        backoff: backoff as never,
+        run: () => {},
+      });
+    expect(define({ delays: ["30s", "2m"] })).not.toThrow();
+    expect(define({ delays: ["30s"], base: "10s" })).toThrow(/either delays, or base and max/);
+    expect(define({ delays: [] })).toThrow(/list of 1 to 100 durations/);
+    expect(define({ delays: Array.from({ length: 101 }, () => "1s") })).toThrow(/1 to 100/);
+    expect(define({ delays: "30s" })).toThrow(/list of 1 to 100 durations/);
+    expect(define({ delays: ["30s", "soon"] })).toThrow(/backoff\.delays\[1\]/);
   });
 });
 

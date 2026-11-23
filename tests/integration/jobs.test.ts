@@ -228,6 +228,35 @@ describe("must-pass", () => {
 });
 
 describe("retries", () => {
+  test("a backoff ladder waits each step exactly, then repeats the last", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("ladder");
+    // random 0 would make a jittered wait 0, so any wait here comes from the ladder.
+    const jobs = jobsOn(database.current, { clock, random: () => 0 });
+    const handle = jobs.define(type, {
+      maxAttempts: 4,
+      backoff: { delays: ["10s", "1m"] },
+      run(_payload: unknown, context) {
+        if (context.attempt < 4) throw new Error(`down ${context.attempt}`);
+        return { sent: true };
+      },
+    });
+    const { id } = await handle.enqueue({});
+    const runAts: string[] = [];
+    for (const wait of ["10s", "1m", "1m"] as const) {
+      expect(await jobs.runOnce()).toMatchObject({ retried: 1 });
+      runAts.push((await jobs.get(id))?.runAt.toISOString() ?? "");
+      clock.advance(wait);
+    }
+    expect(runAts).toEqual([
+      "2026-04-01T00:00:10.000Z",
+      "2026-04-01T00:01:10.000Z",
+      "2026-04-01T00:02:10.000Z",
+    ]);
+    expect(await jobs.runOnce()).toMatchObject({ completed: 1 });
+    expect(await jobs.get(id)).toMatchObject({ status: "completed", attempts: 4 });
+  });
+
   test("a failing job is retried with jittered backoff, then succeeds", async () => {
     const clock = createTestClock("2026-04-01T00:00:00Z");
     const type = unique("flaky");
