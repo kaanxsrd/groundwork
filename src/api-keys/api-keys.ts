@@ -206,11 +206,12 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       typeof value !== "object" ||
       !Number.isSafeInteger(limit) ||
       (limit as number) < 1 ||
+      (limit as number) > 2_147_483_647 ||
       !isDuration(window)
     ) {
       throw new GroundworkError(
         code,
-        `${label} must be { limit: a positive integer, window: a duration such as "1m" }, or null.`,
+        `${label} must be { limit: an integer from 1 to 2,147,483,647, window: a duration such as "1m" }, or null.`,
       );
     }
     parseDuration(window, { label: `${label}.window`, minMs: 1 });
@@ -644,21 +645,34 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       const grace = rotateOptions.grace ?? "24h";
       const graceMs = parseDuration(grace, { label: "grace" });
       if (!validId(id)) return null;
-      const generated = generateKey(namespace, checksum);
-      const [result] = await run(
-        rotateOptions.tx ?? db,
-        mutation(sql`changed as (
-          update ${table} as k set
-            key_hash = ${hashKey(subkey(), generated.body)}::text,
-            prefix = ${generated.prefix}::text,
-            previous_key_hash = case when ${graceMs}::float8 > 0 then k.key_hash else null end,
-            previous_key_expires_at = case when ${graceMs}::float8 > 0 then input.now + ${graceMs}::float8 * interval '1 millisecond' else null end,
-            rotated_at = input.now,
-            updated_at = input.now
-          from input where k.id = ${id}::uuid and k.revoked_at is null
-          returning ${RECORD} as record
-        )`),
-      );
+      // The new prefix can collide like create()'s does; draw another key, as create() does.
+      let generated = generateKey(namespace, checksum);
+      let result: { record: ApiKeyRecord<TScope> } | undefined;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          [result] = await run(
+            rotateOptions.tx ?? db,
+            mutation(sql`changed as (
+              update ${table} as k set
+                key_hash = ${hashKey(subkey(), generated.body)}::text,
+                prefix = ${generated.prefix}::text,
+                previous_key_hash = case when ${graceMs}::float8 > 0 then k.key_hash else null end,
+                previous_key_expires_at = case when ${graceMs}::float8 > 0 then input.now + ${graceMs}::float8 * interval '1 millisecond' else null end,
+                rotated_at = input.now,
+                updated_at = input.now
+              from input where k.id = ${id}::uuid and k.revoked_at is null
+              returning ${RECORD} as record
+            )`),
+          );
+          break;
+        } catch (error) {
+          if (pgCode(error) === "23505" && attempt < 3) {
+            generated = generateKey(namespace, checksum);
+            continue;
+          }
+          throw error;
+        }
+      }
       if (!result) return null;
       await emit({
         type: "rotate",

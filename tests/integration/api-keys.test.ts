@@ -525,6 +525,40 @@ describe("audit log", () => {
       expect(logged).not.toContain(secret.slice(17, 40));
   });
 
+  test("rotate() draws another key when the new prefix collides", async () => {
+    const { keys } = setup();
+    const { record } = await keys.create({ name: "Collides", scopes: [] });
+    let collisions = 0;
+    const colliding = createApiKeys({
+      db: {
+        execute: (query: SQLWrapper) => {
+          // The first rotate statement hits the prefix index, as a 48-bit prefix sometimes does.
+          if (collisions === 0 && dialect.sqlToQuery(query.getSQL()).sql.includes("rotated_at")) {
+            collisions++;
+            return Promise.reject(Object.assign(new Error("duplicate prefix"), { code: "23505" }));
+          }
+          return database.current.db.execute(query);
+        },
+      },
+      table: apiKeys,
+      secret: TEST_SECRET,
+      namespace: "tst",
+      scopes: SCOPES,
+      defaultRateLimit: null,
+    });
+    const rotated = await colliding.rotate(record.id);
+    expect(collisions).toBe(1);
+    expect(rotated?.record.id).toBe(record.id);
+    expect((await keys.verify(bearer(rotated?.key ?? ""))).ok).toBe(true);
+  });
+
+  test("a per-key limit must fit Postgres's integer", async () => {
+    const { keys } = setup();
+    await expect(
+      keys.create({ name: "Huge", scopes: [], rateLimit: { limit: 3_000_000_000, window: "1m" } }),
+    ).rejects.toThrow(/integer from 1 to 2,147,483,647/);
+  });
+
   test("create() leaves no key behind when recording it fails, and never retries the hook's error", async () => {
     const name = `hook-fails-${Date.now()}`;
     let calls = 0;
