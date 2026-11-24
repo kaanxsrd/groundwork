@@ -23,7 +23,7 @@ bun run smoke      # build, publint, attw, then the packed package on Node (need
 bun run example    # next build + HTTP checks of examples/next-app and the README quickstart
 ```
 
-CI runs all of these, and the integration tests against Postgres 16 and 18 with both drivers. Redis is only needed for the Redis rate-limit store tests; Postgres stays the only infrastructure groundwork requires.
+CI runs all of these, and the integration tests against Postgres 16 and 18 with both drivers. A `drizzle-next` job also runs them against Drizzle 1.0's release candidate; it can fail without failing the workflow, but a failure there is worth a look. Redis is only needed for the Redis rate-limit store tests; Postgres stays the only infrastructure groundwork requires.
 
 ## Tests
 

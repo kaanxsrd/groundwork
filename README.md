@@ -306,7 +306,7 @@ groundwork isn't for edge runtimes, databases other than Postgres, or stacks tha
 ## Requirements
 
 - PostgreSQL 16 or newer.
-- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`.
+- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`. Drizzle 1.0 is supported once it's released; until then CI also runs the tests against its release candidate.
 - Node.js 22+ or Bun 1.4+. ESM only.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
 - For `@vantedev/groundwork/next`: nothing extra. It never imports `next`; CI tests it with Next.js 16.

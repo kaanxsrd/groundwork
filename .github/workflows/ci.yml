@@ -65,6 +65,43 @@ jobs:
         if: failure()
         run: docker compose logs
 
+  drizzle-next:
+    # groundwork moves to Drizzle 1.0 once it's released (PLAN.md section 9). Until then this runs
+    # the suite against Drizzle's release candidate, so the move stays small. It doesn't fail the
+    # workflow: a new release candidate can break here before groundwork has had a chance to change.
+    name: Drizzle 1.0 release candidate (Postgres 18, both drivers)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      POSTGRES_VERSION: "18"
+      TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
+      TEST_REDIS_URL: redis://127.0.0.1:63790
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - run: bun install --frozen-lockfile
+      - name: Install drizzle-orm and drizzle-kit from the rc tag
+        run: bun add --dev --exact drizzle-orm@rc drizzle-kit@rc
+      # Drizzle 1.0's migrate() and drizzle-kit refuse the old folder format, as they do for apps.
+      - name: Convert tests/migrations to drizzle-kit 1.0's folder format
+        run: bun x drizzle-kit up --dialect postgresql --out tests/migrations
+      # src only: the test harness's database type is written for Drizzle 0.45.
+      - name: src type-checks against Drizzle 1.0
+        run: bun x tsc --noEmit -p tsconfig.build.json
+      - name: drizzle-kit 1.0 finds no changes in the fixture schema
+        run: bun run db:drift
+      - run: bun run db:up
+      - name: Integration tests with postgres-js
+        run: bun run test:integration
+        env: { GW_TEST_DRIVER: postgres-js }
+      - name: Integration tests with node-postgres
+        run: bun run test:integration
+        env: { GW_TEST_DRIVER: node-postgres }
+      - name: Database logs
+        if: failure()
+        run: docker compose logs
+
   smoke:
     name: Built package on Node 22
     runs-on: ubuntu-latest
