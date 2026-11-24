@@ -123,6 +123,13 @@ const RECORD = sql.raw(`jsonb_build_object(
 
 const toDate = (value: number | null) => (value === null ? null : new Date(value));
 
+/** When a schedule's tick was due: its payload's `scheduledAt`, or the job's creation if that's missing. */
+function scheduledAtOf(job: StoredJob): Date {
+  const stored = (job.payload as { scheduledAt?: unknown } | null)?.scheduledAt;
+  const at = typeof stored === "string" ? new Date(stored) : new Date(Number.NaN);
+  return Number.isNaN(at.getTime()) ? new Date(job.created_at) : at;
+}
+
 function toRecord(row: StoredJob): JobRecord {
   return {
     id: row.id,
@@ -593,9 +600,7 @@ export function createJobs(options: JobsOptions): Jobs {
       createdAt: new Date(job.created_at),
       ...(handler.schedule
         ? {
-            scheduledAt: new Date(
-              String((job.payload as { scheduledAt?: string })?.scheduledAt ?? job.created_at),
-            ),
+            scheduledAt: scheduledAtOf(job),
           }
         : {}),
     };

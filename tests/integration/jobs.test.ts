@@ -251,6 +251,24 @@ describe("must-pass", () => {
     });
   });
 
+  test("a schedule run without a stored scheduledAt gets its creation time", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const jobs = jobsOn(database.current, { clock });
+    const name = unique("no-scheduled-at");
+    const seen: Date[] = [];
+    jobs.schedule(name, { every: "1h" }, ({ scheduledAt }) => {
+      seen.push(scheduledAt);
+    });
+    // A row written by hand (or by an older release) whose payload lacks scheduledAt.
+    await database.current.db.execute(
+      sql`insert into ${jobsTable} (type, payload, max_attempts, run_at, created_at, updated_at)
+          values (${`schedule:${name}`}, '{}'::jsonb, 1, '2026-03-31T23:00:00Z', '2026-03-31T23:00:00Z', '2026-03-31T23:00:00Z')`,
+    );
+    await jobs.runOnce();
+    expect(seen.every((at) => !Number.isNaN(at.getTime()))).toBe(true);
+    expect(seen.map((at) => at.toISOString())).toContain("2026-03-31T23:00:00.000Z");
+  });
+
   test("a schedule's runs are listed by its name", async () => {
     const clock = createTestClock("2026-04-01T00:00:00Z");
     const jobs = jobsOn(database.current, { clock });

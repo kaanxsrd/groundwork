@@ -80,3 +80,22 @@ describe("a secret function", () => {
     await expect(rule.check("x")).rejects.toThrow(/at least 32 bytes/);
   });
 });
+
+describe("gw.jobs", () => {
+  test("a config error while adding the cleanup schedules isn't cached away", () => {
+    const tables = groundworkTables();
+    const gw = createGroundwork({
+      db,
+      tables: {
+        jobs: tables.jobs,
+        jobSchedules: tables.jobSchedules,
+        idempotencyKeys: tables.idempotencyKeys,
+      },
+      secret: TEST_SECRET,
+      idempotency: { ttl: "0s" },
+    });
+    expect(() => gw.jobs).toThrow(/ttl/);
+    // Before, the second access returned a cached instance without groundwork's cleanups.
+    expect(() => gw.jobs).toThrow(/ttl/);
+  });
+});

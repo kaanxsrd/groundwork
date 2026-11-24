@@ -309,7 +309,9 @@ export function createGroundwork<
     if (tables.jobs === undefined) throw missingTable("jobs", "jobs");
     if (tables.jobSchedules === undefined) throw missingTable("jobs", "jobSchedules");
     const config = options.jobs ?? {};
-    jobs = createJobs({
+    // Cached only once the cleanup schedules are on it, so a config error here can't leave a
+    // cached instance without them.
+    const created = createJobs({
       db,
       table: tables.jobs,
       schedulesTable: tables.jobSchedules,
@@ -321,17 +323,18 @@ export function createGroundwork<
     const canRateLimit = options.rateLimit?.store !== undefined || tables.rateLimits !== undefined;
     if (config.rateLimitCleanup !== false && canRateLimit) {
       const limiter = getRateLimit();
-      jobs.schedule("groundwork.rate-limit-cleanup", { every: "1h" }, async () => ({
+      created.schedule("groundwork.rate-limit-cleanup", { every: "1h" }, async () => ({
         deleted: await limiter.cleanup(),
       }));
     }
     if (config.idempotencyCleanup !== false && tables.idempotencyKeys !== undefined) {
       const keys = getIdempotency();
-      jobs.schedule("groundwork.idempotency-cleanup", { every: "1h" }, async () => ({
+      created.schedule("groundwork.idempotency-cleanup", { every: "1h" }, async () => ({
         deleted: await keys.cleanup(),
       }));
     }
-    return jobs;
+    jobs = created;
+    return created;
   }
 
   let idempotency: Idempotency | undefined;
