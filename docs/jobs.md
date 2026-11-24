@@ -84,7 +84,9 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
   await sendDigest.enqueue({ userId }, { dedupeKey: `digest:${userId}`, delay: "5m", replace: true });
   ```
 
-  If the job with that key is already running, it keeps running but gives up the key, and this call enqueues a new job (`created: true`): the running one may have read its data already, so the latest change still gets a run. With several workers the two can overlap. A running job whose worker has stopped (its lease ran out) is replaced like a pending one. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
+  If the job with that key is already running, it keeps running but gives up the key, and this call enqueues a new job (`created: true`): the running one may have read its data already, so the latest change still gets a run. With several workers the two can overlap. The running job's current attempt becomes its last, so its out-of-date payload is never retried after the new one: if it fails, it fails for good, and `onExhausted` runs as usual. A running job whose worker has stopped (its lease ran out) is replaced like a pending one.
+
+  A replaced job keeps its attempt count, and gets this call's `maxAttempts` on top of the attempts it has used, so the new payload has its full budget. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
 
 ### Many at once
 

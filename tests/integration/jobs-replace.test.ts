@@ -31,6 +31,12 @@ interface Row extends Record<string, unknown> {
   run_at_ms: number;
 }
 
+/** Rows by their payload's n, for jobs created at the same test-clock instant. */
+function byPayload(rows: Row[]): Row[] {
+  const n = (row: Row) => (row.payload as { n: number }).n;
+  return [...rows].sort((a, b) => n(a) - n(b));
+}
+
 async function rowsOfType(type: string): Promise<Row[]> {
   return database.current.rows<Row>(sql`
     select id::text as id, status, payload, dedupe_key, attempts, result,
@@ -260,4 +266,144 @@ describe("enqueue with replace", () => {
       handle.enqueueMany([{ payload: { n: 1 }, dedupeKey: "k", replace: true } as never]),
     ).rejects.toThrow(/jobs\[0\]: enqueueMany doesn't take replace/);
   });
+
+  test("a replaced job gets its full maxAttempts, even if its last attempt was running", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("budget");
+    const releases: (() => void)[] = [];
+    const victim = jobsOn(database.current, { clock, workerId: "victim", lease: "30s" });
+    victim.define(type, {
+      timeout: false,
+      run: () => new Promise<string>((resolve) => releases.push(() => resolve("victim"))),
+    });
+    const handle = jobsOn(database.current, { clock }).define(type, {
+      maxAttempts: 1,
+      run(_payload: { n: number }) {},
+    });
+    await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    const victimRun = victim.runOnce({ budgetMs: 50 });
+    await waitUntil(() => releases.length === 1);
+
+    // Its only attempt is running, and its worker is gone: the replace must still get a run.
+    clock.advance("31s");
+    expect((await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).created).toBe(false);
+    const seen: number[] = [];
+    const rescuer = jobsOn(database.current, { clock, workerId: "rescuer" });
+    rescuer.define(type, {
+      run(payload: { n: number }) {
+        seen.push(payload.n);
+      },
+    });
+    // Before, this failed it for good without running it ("stopped before finishing").
+    expect(await rescuer.runOnce()).toMatchObject({ claimed: 1, completed: 1, failed: 0 });
+    expect(seen).toEqual([2]);
+    for (const done of releases) done();
+    await victimRun;
+  }, 30_000);
+
+  test("a pending job in backoff gets its full maxAttempts again when it's replaced", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("backoff");
+    const jobs = jobsOn(database.current, { clock });
+    const handle = jobs.define(type, {
+      maxAttempts: 2,
+      run(payload: { n: number }) {
+        if (payload.n === 1) throw new Error("not yet");
+      },
+    });
+    await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    expect((await jobs.runOnce()).retried).toBe(1);
+    await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true });
+    const [row] = await database.current.rows<{ max_attempts: number; last_error: string | null }>(
+      sql`select max_attempts, last_error from ${jobsTable} where type = ${type}`,
+    );
+    // One attempt used, two to come: the replaced job's own maxAttempts, after the attempts so far.
+    expect(row).toEqual({ max_attempts: 3, last_error: null });
+    expect((await jobs.runOnce()).completed).toBe(1);
+  });
+
+  test("a running job that gave up its key isn't retried, so the newest payload runs last", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("superseded");
+    const seen: number[] = [];
+    let failFirst!: () => void;
+    const firstFails = new Promise<void>((resolve) => {
+      failFirst = resolve;
+    });
+    const define = (worker: ReturnType<typeof jobsOn>) =>
+      worker.define(type, {
+        timeout: false,
+        async run(payload: { n: number }) {
+          seen.push(payload.n);
+          if (payload.n === 1) {
+            await firstFails;
+            throw new Error("the stale run failed");
+          }
+        },
+      });
+    const busy = jobsOn(database.current, { clock, workerId: "busy" });
+    const handle = define(busy);
+    await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    const busyRun = busy.runOnce({ budgetMs: 50 });
+    await waitUntil(() => seen.length === 1);
+
+    // A newer change: the running job gives up its key, and the new job runs and completes.
+    expect((await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).created).toBe(true);
+    const other = jobsOn(database.current, { clock, workerId: "other" });
+    define(other);
+    expect(await other.runOnce()).toMatchObject({ completed: 1 });
+
+    // Then the superseded run fails. It must not be retried with its stale payload.
+    failFirst();
+    await busyRun;
+    clock.advance("2h");
+    expect((await other.runOnce()).claimed).toBe(0);
+    expect(seen).toEqual([1, 2]);
+    expect(
+      byPayload(await rowsOfType(type)).map((row) => [row.payload, row.status, row.dedupe_key]),
+    ).toEqual([
+      [{ n: 1 }, "failed", null],
+      [{ n: 2 }, "completed", "k"],
+    ]);
+  }, 30_000);
+
+  test("a running job that gave up its key and then lost its worker never runs again", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("superseded-gone");
+    const seen: number[] = [];
+    const releases: (() => void)[] = [];
+    const victim = jobsOn(database.current, { clock, workerId: "victim", lease: "30s" });
+    victim.define(type, {
+      timeout: false,
+      run: (payload: { n: number }) =>
+        new Promise<void>((resolve) => {
+          seen.push(payload.n);
+          releases.push(resolve);
+        }),
+    });
+    const handle = jobsOn(database.current, { clock }).define(type, {
+      run(_payload: { n: number }) {},
+    });
+    await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    const victimRun = victim.runOnce({ budgetMs: 50 });
+    await waitUntil(() => seen.length === 1);
+    // The key goes to a new job while the first is alive; then the first's worker stalls.
+    expect((await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).created).toBe(true);
+    clock.advance("31s");
+
+    const rescuer = jobsOn(database.current, { clock, workerId: "rescuer", lease: "30s" });
+    rescuer.define(type, {
+      run(payload: { n: number }) {
+        seen.push(payload.n);
+      },
+    });
+    await rescuer.runOnce();
+    expect(seen).toEqual([1, 2]);
+    expect(byPayload(await rowsOfType(type)).map((row) => [row.payload, row.status])).toEqual([
+      [{ n: 1 }, "failed"],
+      [{ n: 2 }, "completed"],
+    ]);
+    for (const done of releases) done();
+    await victimRun;
+  }, 30_000);
 });

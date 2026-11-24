@@ -446,7 +446,8 @@ export function createJobs(options: JobsOptions): Jobs {
     // whatever its status now. It may have finished already; it's still the job this collided with.
     const [existing] = rowsOf<{ id: string }>(
       await target.execute(
-        sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text order by created_at desc, id desc limit 1`,
+        sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text
+          order by (status in ('pending', 'running')) desc, created_at desc, id desc limit 1`,
       ),
     );
     if (!existing)
@@ -482,7 +483,10 @@ export function createJobs(options: JobsOptions): Jobs {
           with input as materialized (select ${now()} as now),
           replaced as (
             update ${table} as j set payload = ${payload}, run_at = ${runAt},
-              priority = ${job.priority}::int, max_attempts = ${job.maxAttempts}::int,
+              priority = ${job.priority}::int,
+              -- Attempts fence workers, so they only grow; the new payload gets its full budget
+              -- on top of the attempts used so far.
+              max_attempts = j.attempts + ${job.maxAttempts}::int, last_error = null,
               status = 'pending', locked_by = null, locked_until = null, updated_at = input.now
             from input
             where ${mine}
@@ -504,9 +508,12 @@ export function createJobs(options: JobsOptions): Jobs {
       );
       if (row) return { id: row.id, created: row.created === true };
       // A live running job holds the key. It keeps running without it, and the loop enqueues
-      // this one. If the job finished or was replaced meanwhile, this changes nothing.
+      // this one. Its current attempt becomes its last: its payload is out of date, so it must
+      // not be retried after (or alongside) the newer job. If the job finished or was replaced
+      // meanwhile, this changes nothing.
       await target.execute(sql`
-        update ${table} as j set dedupe_key = null, updated_at = ${now()}
+        update ${table} as j set dedupe_key = null, max_attempts = least(j.max_attempts, j.attempts),
+          updated_at = ${now()}
         where ${mine} and j.status = 'running'`);
     }
     // Other callers kept taking the key between the two statements.
@@ -655,7 +662,7 @@ export function createJobs(options: JobsOptions): Jobs {
               unknownKeys.map((key) => sql`${key}::text`),
               sql`, `,
             )})
-          order by dedupe_key, created_at desc, id desc`),
+          order by dedupe_key, (status in ('pending', 'running')) desc, created_at desc, id desc`),
       );
       for (const row of found) byKey.set(row.dedupe_key, row.id);
     }
@@ -817,26 +824,36 @@ export function createJobs(options: JobsOptions): Jobs {
           update ${schedulesTable} set last_failure_at = ${now()}, last_error = ${lastError}::text, updated_at = ${now()}
           where name = ${handler.schedule}::text and exists (select 1 from done))`
       : sql``;
-    const [row] = rowsOf<{ done: unknown }>(
+    // Decided against the row, not the claimed copy: a replace can make the running attempt the
+    // last one after the job was claimed.
+    const final = sql`(${exhausted}::boolean or j.attempts >= j.max_attempts)`;
+    const [row] = rowsOf<{ status: string }>(
       await db.execute(sql`
         with done as (
           update ${table} as j set
-            status = ${exhausted ? "failed" : "pending"}::text,
-            run_at = ${exhausted ? sql`j.run_at` : sql`${now()} + ${delayMs}::float8 * interval '1 millisecond'`},
-            completed_at = ${exhausted ? now() : sql`null`},
+            status = case when ${final} then 'failed' else 'pending' end,
+            run_at = case when ${final} then j.run_at
+              else ${now()} + ${delayMs}::float8 * interval '1 millisecond' end,
+            completed_at = case when ${final} then ${now()} else null end,
             last_error = ${lastError}::text, locked_by = null, locked_until = null, updated_at = ${now()}
-          where ${owned(job)} returning 1
+          where ${owned(job)} returning j.status
         )${scheduleUpdate}
-        select count(*)::int as done from done`),
+        select status from done`),
     );
-    if (!row || toNumber(row.done) !== 1) return "lost";
+    if (!row) return "lost";
+    const failed = row.status === "failed";
     const context = { type: job.type, id: job.id, attempt: job.attempts, error: { name, message } };
-    if (exhausted) {
+    if (failed && !exhausted) {
+      logger.warn(
+        `Job "${job.type}" failed and isn't retried: a newer job with its dedupe key replaced it.`,
+        context,
+      );
+    } else if (failed) {
       logger.error(`Job "${job.type}" failed for good after ${job.attempts} attempt(s).`, context);
     } else {
       logger.warn(`Job "${job.type}" failed; retrying in ${Math.ceil(delayMs / 1000)}s.`, context);
     }
-    return exhausted ? "failed" : "retried";
+    return failed ? "failed" : "retried";
   }
 
   interface Counters {

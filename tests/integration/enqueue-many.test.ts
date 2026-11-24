@@ -366,4 +366,25 @@ describe("enqueueMany under concurrency", () => {
     );
     expect((error as Error).message).toMatch(/^jobs\[0\]: tx goes on the call/);
   });
+
+  test("the duplicate looked up after the snapshot is the live job, not an older finished one", async () => {
+    for (const many of [false, true]) {
+      const type = unique(many ? "fallback-many" : "fallback-one");
+      const handle = jobsOn(database.current).define(type, { run(_payload: { n: number }) {} });
+      // A job with the key that finished, but whose created_at is later than the live one's
+      // (a long transaction enqueued the live one).
+      await database.current.rows(sql`insert into ${jobsTable} (type, payload, dedupe_key, status, created_at, completed_at)
+        values (${type}, '{}', 'k', 'completed', now() + interval '1 hour', now())`);
+      const live = await holdOpen<{ id: string }>(
+        sql`insert into ${jobsTable} (type, payload, dedupe_key, created_at)
+          values (${type}, '{}', 'k', now() - interval '1 hour') returning id::text as id`,
+      );
+      const pending = many
+        ? handle.enqueueMany([{ payload: { n: 1 }, dedupeKey: "k" }]).then(([result]) => result)
+        : handle.enqueue({ n: 1 }, { dedupeKey: "k" });
+      await untilSomeoneWaitsForALock();
+      await live.commit();
+      expect(await pending).toEqual({ id: live.rows[0]?.id ?? "missing", created: false });
+    }
+  });
 });
