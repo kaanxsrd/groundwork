@@ -4,7 +4,7 @@ import type { AuditActor } from "../audit/types.ts";
 import { ipInBlocks } from "../internal/cidr.ts";
 import type { Clock } from "../internal/clock.ts";
 import { lazySubkey, type SecretSource, timingSafeEqual } from "../internal/crypto.ts";
-import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
+import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
@@ -151,7 +151,7 @@ function pgCode(error: unknown): string | undefined {
 
 /** A text[] parameter. Drizzle expands JS arrays into lists, so they travel as JSON instead. */
 const textArray = (values: readonly string[]): SQL =>
-  sql`array(select value from jsonb_array_elements_text(${JSON.stringify(values)}::jsonb) with ordinality as t(value, position) order by position)::text[]`;
+  sql`array(select value from jsonb_array_elements_text(${jsonbParam(JSON.stringify(values))}) with ordinality as t(value, position) order by position)::text[]`;
 
 function actorName(actor: AuditActor): string | null {
   if (actor.id !== undefined && actor.id !== null) return String(actor.id);
@@ -371,7 +371,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
     }
     if (input.metadata !== undefined) {
       const metadata = toJsonObject(input.metadata, noRedaction, "metadata");
-      out.metadata = sql`${metadata === null ? null : JSON.stringify(metadata)}::jsonb`;
+      out.metadata = jsonbParam(metadata === null ? null : JSON.stringify(metadata));
     }
     if (input.expiresAt !== undefined) {
       if (input.expiresAt !== null) {

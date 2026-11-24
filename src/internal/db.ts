@@ -1,4 +1,4 @@
-import type { SQLWrapper } from "drizzle-orm";
+import { type SQL, type SQLWrapper, sql } from "drizzle-orm";
 
 /**
  * Any Drizzle Postgres database or transaction, whichever driver created it (`postgres`, `pg`,
@@ -7,6 +7,17 @@ import type { SQLWrapper } from "drizzle-orm";
  */
 export interface GroundworkDatabase {
   execute(query: SQLWrapper): PromiseLike<unknown>;
+}
+
+/**
+ * A `jsonb` parameter from JSON text (`null` is SQL `NULL`). The text travels as a `text`
+ * parameter and Postgres casts it, because drivers don't agree on `jsonb` parameters: postgres-js
+ * runs `JSON.stringify` on anything the server says is `jsonb`, so already-encoded JSON would be
+ * stored as a JSON string. Drizzle 0.45 turned that serializer off on every postgres-js client it
+ * wrapped; Drizzle 1.0 doesn't. A `text` parameter is sent unchanged by every driver.
+ */
+export function jsonbParam(json: string | null): SQL {
+  return sql`${json}::text::jsonb`;
 }
 
 /** Normalises `db.execute()` results: postgres-js returns an array, node-postgres `{ rows }`. */

@@ -1,6 +1,6 @@
 import { type SQL, sql } from "drizzle-orm";
 import type { Clock } from "../internal/clock.ts";
-import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
+import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
 import { parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { assertTableColumns } from "../internal/table.ts";
@@ -203,7 +203,7 @@ export function createAuditLog<const TAction extends string, const TEntity exten
         ? now()
         : sql`${validDate(event.occurredAt, at("occurredAt"))}::timestamptz`;
 
-    return sql`(${occurredAt}, ${actor.type}::text, ${optionalId(actor.id, at("actor.id"))}::text, ${optionalText(actor.label, at("actor.label"))}::text, ${event.action}::text, ${entityType}::text, ${entityId}::text, ${optionalText(event.summary, at("summary"))}::text, ${changes === null ? null : JSON.stringify(changes)}::jsonb, ${metadata === null ? null : JSON.stringify(metadata)}::jsonb, ${optionalText(event.ip, at("ip"))}::text, ${optionalText(event.requestId, at("requestId"))}::text)`;
+    return sql`(${occurredAt}, ${actor.type}::text, ${optionalId(actor.id, at("actor.id"))}::text, ${optionalText(actor.label, at("actor.label"))}::text, ${event.action}::text, ${entityType}::text, ${entityId}::text, ${optionalText(event.summary, at("summary"))}::text, ${jsonbParam(changes === null ? null : JSON.stringify(changes))}, ${jsonbParam(metadata === null ? null : JSON.stringify(metadata))}, ${optionalText(event.ip, at("ip"))}::text, ${optionalText(event.requestId, at("requestId"))}::text)`;
   }
 
   function toEntry(row: Row): AuditEntry<TAction, TEntity> {

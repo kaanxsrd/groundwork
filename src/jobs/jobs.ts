@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import { type SQL, sql } from "drizzle-orm";
 import { toJsonValue } from "../audit/json.ts";
 import type { Clock } from "../internal/clock.ts";
-import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
+import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
 import { renewEveryMs } from "../internal/lease.ts";
@@ -384,7 +384,7 @@ export function createJobs(options: JobsOptions): Jobs {
         with input as materialized (select ${now()} as now),
         inserted as (
           insert into ${table} as j (type, payload, priority, max_attempts, run_at, dedupe_key, created_at, updated_at)
-          select ${handler.type}::text, ${JSON.stringify(json)}::jsonb, ${priority}::int, ${maxAttempts}::int,
+          select ${handler.type}::text, ${jsonbParam(JSON.stringify(json))}, ${priority}::int, ${maxAttempts}::int,
             ${runAt}, ${dedupeKey}::text, input.now, input.now
           from input
           on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
@@ -529,7 +529,7 @@ export function createJobs(options: JobsOptions): Jobs {
     const [row] = rowsOf<{ done: unknown }>(
       await db.execute(sql`
         with done as (
-          update ${table} as j set status = 'completed', completed_at = ${now()}, result = ${JSON.stringify(toJsonValue(result))}::jsonb,
+          update ${table} as j set status = 'completed', completed_at = ${now()}, result = ${jsonbParam(JSON.stringify(toJsonValue(result)))},
             last_error = null, locked_by = null, locked_until = null, updated_at = ${now()}
           where ${owned(job)} returning 1
         )${scheduleUpdate}
