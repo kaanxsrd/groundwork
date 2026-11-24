@@ -525,6 +525,32 @@ describe("audit log", () => {
       expect(logged).not.toContain(secret.slice(17, 40));
   });
 
+  test("create() leaves no key behind when recording it fails, and never retries the hook's error", async () => {
+    const name = `hook-fails-${Date.now()}`;
+    let calls = 0;
+    const failing = (code?: string) =>
+      createApiKeys({
+        db: database.current.db,
+        table: apiKeys,
+        secret: TEST_SECRET,
+        namespace: "tst",
+        scopes: SCOPES,
+        defaultRateLimit: null,
+        onEvent: () => {
+          calls++;
+          throw Object.assign(new Error("audit down"), code === undefined ? {} : { code });
+        },
+      });
+    // A unique violation from the hook, not from the key's prefix: no second key is drawn.
+    await expect(failing("23505").create({ name, scopes: [] })).rejects.toThrow("audit down");
+    expect(calls).toBe(1);
+    await expect(failing().create({ name, scopes: [] })).rejects.toThrow("audit down");
+    const [row] = await database.current.rows<{ n: number }>(
+      sql`select count(*)::int as n from ${apiKeys} where name = ${name}`,
+    );
+    expect(row?.n).toBe(0);
+  });
+
   test("a change in a rolled-back transaction leaves neither the change nor its entry", async () => {
     const { gw, keys } = setup();
     const { key, record } = await keys.create({ name: "Kept", scopes: [] });

@@ -280,7 +280,8 @@ export function createGroundwork<
         "API keys get a 60-per-minute limit by default, which needs gw.rateLimit: export the rateLimits table too, or set apiKeys.defaultRateLimit: null.",
       );
     }
-    // With the audit log configured, every change to a key is recorded in the same transaction.
+    // With the audit log configured, every change to a key is recorded: in the caller's
+    // transaction when they pass `tx`, otherwise right after the change (see docs/api-keys.md).
     const auditLog =
       options.audit !== undefined && tables.auditLog !== undefined ? getAudit() : undefined;
     apiKeys = createApiKeys<TScopes>({

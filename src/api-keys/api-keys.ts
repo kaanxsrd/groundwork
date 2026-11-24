@@ -507,8 +507,10 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       }
       const target = mutationOptions?.tx ?? db;
 
-      // A 48-bit prefix can collide; the unique index catches it, and we draw a new key.
-      for (let attempt = 0; ; attempt++) {
+      // A 48-bit prefix can collide; the unique index catches it, and we draw a new key. Only the
+      // insert is retried: a unique violation from onEvent must not create another key.
+      let created: { key: string; record: ApiKeyRecord<TScope> } | undefined;
+      for (let attempt = 0; created === undefined; attempt++) {
         const generated = generateKey(namespace, checksum);
         try {
           const [result] = await run(
@@ -524,13 +526,24 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
             )`),
           );
           if (!result) throw new Error("API key insert returned no row");
-          await emit({ type: "create", key: result.record, actor, tx: mutationOptions?.tx });
-          return { key: generated.key, record: result.record };
+          created = { key: generated.key, record: result.record };
         } catch (error) {
           if (pgCode(error) === "23505" && attempt < 3) continue;
           throw error;
         }
       }
+      try {
+        await emit({ type: "create", key: created.record, actor, tx: mutationOptions?.tx });
+      } catch (error) {
+        // Without a tx the key is already committed, but the caller never sees its plaintext:
+        // delete it, so a failed audit write leaves no active key that nobody holds. With a tx,
+        // the caller's rollback undoes the insert.
+        if (mutationOptions?.tx === undefined) {
+          await db.execute(sql`delete from ${table} as k where k.id = ${created.record.id}::uuid`);
+        }
+        throw error;
+      }
+      return created;
     },
 
     async get(id) {

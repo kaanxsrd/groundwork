@@ -119,7 +119,7 @@ On failure the result has `reason`, `status`, `message`, `headers`, the `key` wh
 | `revoke(id, { reason })` | Permanent, for the key and any rotated-out key. |
 | `delete(id)` | Deletes a revoked key's record. Active keys must be revoked first. |
 
-Every method takes `{ actor, tx }`. With `tx` the change, and its audit entry, commits or rolls back with your transaction.
+Every method takes `{ actor, tx }`. With `tx` the change, and its audit entry, commits or rolls back with your transaction. Without one they're two statements, because groundwork only ever calls `db.execute()` and can't open a transaction of its own. If recording the entry fails, the call throws. `create()` then deletes the key it just made, so no active key is left that nobody holds. Other changes (a revoke, say) stay made. Pass `tx` when the change and its record must stand or fall together.
 
 ## Rate limits and quotas
 
