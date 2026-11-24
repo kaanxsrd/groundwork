@@ -69,7 +69,7 @@ const gw = createGroundwork({
 | | After the change |
 | --- | --- |
 | API keys | Keys stored under a previous secret still verify, and move to the new secret the first time they're used. New keys use the new secret. |
-| Idempotency keys | Keys stored under a previous secret are still answered (replayed, or a 409 or 422) until they expire, so a retry that straddles the change doesn't run twice. New keys use the new secret. |
+| Idempotency keys | Keys stored under a previous secret are still answered (replayed, or a 409 or 422) until they expire, so a retry that straddles the change doesn't run twice. While `previousSecrets` is set, each new key is stored under every secret, so instances on either side of a rollout see each other's requests, even two copies that arrive at the same moment. |
 | Rate limits | Start over. Counts aren't worth carrying across. |
 | Audit log, jobs | Don't use the secret. |
 
@@ -78,18 +78,19 @@ const gw = createGroundwork({
 1. Keep `secret` as it is and add the new secret to `previousSecrets`. Every instance now accepts both.
 2. Swap them: the new secret becomes `secret`, and the old one moves to `previousSecrets`.
 
-While the second deploy rolls out, rate-limit counts are split between the two secrets, so a subject can briefly get up to twice its limit.
+While the second deploy rolls out, rate-limit counts are split between the two secrets, so a subject can briefly get up to twice its limit. An API key used on instances of both steps moves back and forth between the two secrets, with a write each time, until every instance is on step 2.
 
 **Drop the old secret** once nothing is stored under it:
 
 - Idempotency keys: once your longest `ttl` (24 hours by default) has passed since step 2 finished.
-- API keys: a key moves to the new secret only when it's used, and that use is always recorded in `last_used_at`. So these keys still need the old secret:
+- API keys: a key moves to the new secret only when it's used, and that use is always recorded in `last_used_at`. A key rotated before the change is the exception: while its grace period lasts, a use of the old key moves nothing, so only a use after the grace period proves the new key moved. These keys still need the old secret:
 
   ```sql
   select id, name, owner_id, last_used_at from gw_api_keys
   where revoked_at is null and (expires_at is null or expires_at > now())
     and created_at < :step_2_finished
-    and (last_used_at is null or last_used_at < :step_2_finished);
+    and (last_used_at is null or last_used_at < :step_2_finished
+      or (rotated_at < :step_2_finished and last_used_at <= previous_key_expires_at));
   ```
 
   They stop working when the old secret goes. Wait for them to be used or to expire, or `rotate()` them and give their owners the new keys.

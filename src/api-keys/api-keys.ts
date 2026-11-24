@@ -468,8 +468,9 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
     const work = (async () => {
       if (rehash) {
         // Move a key stored under a previous secret or a legacy hash to the current hash, once,
-        // and record this use with it, whatever the once-a-minute limit says. So every key used
-        // since the secret changed has a lastUsedAt after the change (docs/core-concepts.md).
+        // and record this use with it, whatever the once-a-minute limit says. The docs' query
+        // for keys that still need an old secret relies on it (docs/core-concepts.md); a use of
+        // a rotated-out key in its grace period moves nothing, which that query allows for.
         await db.execute(sql`
           update ${table} as k set key_hash = ${rehash.to}::text, last_used_at = ${now()}, last_used_ip = ${ip}::text
           where k.id = ${row.id}::uuid and k.key_hash = ${rehash.from}::text`);

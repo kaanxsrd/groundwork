@@ -70,7 +70,7 @@ interface Identity {
 type FingerprintParts = readonly (string | Uint8Array)[];
 
 type Claim =
-  | { readonly kind: "claimed"; readonly token: string }
+  | { readonly kind: "claimed"; readonly token: string; readonly keys: readonly string[] }
   | { readonly kind: "mismatch" }
   | { readonly kind: "in_progress" }
   | { readonly kind: "completed"; readonly response: string };
@@ -157,109 +157,82 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
   }
 
   /**
+   * The rows a claim holds. Without previous secrets, one: the key under the secret. With them,
+   * one under every secret, so a claim made under any of them conflicts with this one in the
+   * unique index. That's what keeps the two-deploy rollout safe, where some instances still store
+   * the old secret's key while others already store the new one's: each pair that can run at the
+   * same time shares a secret. Sorted by key in byte order, the order `collate "C"` uses, so
+   * claims and completions that share keys lock them in the same order and can't deadlock.
+   */
+  function rowsOfClaim(identity: Identity): readonly Stored[] {
+    const unique = new Map<string, Stored>();
+    for (const stored of [identity.current, ...identity.previous]) unique.set(stored.key, stored);
+    return [...unique.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  }
+
+  /** The conflict rule for one row: take over a row that has expired or whose request crashed. */
+  const takeover = sql`
+    on conflict (key) do update set
+      scope = excluded.scope, fingerprint = excluded.fingerprint,
+      locked_by = excluded.locked_by, locked_until = excluded.locked_until,
+      response = null, created_at = excluded.created_at, completed_at = null,
+      expires_at = excluded.expires_at
+    where (i.expires_at <= excluded.created_at
+        and (i.completed_at is not null or i.locked_until <= excluded.created_at))
+      or (i.completed_at is null and i.locked_until <= excluded.created_at
+        and i.fingerprint = excluded.fingerprint)`;
+
+  async function begin(identity: Identity, scope: string, ttlMs: number): Promise<Claim> {
+    const stored = rowsOfClaim(identity);
+    const token = randomHex(16);
+    const only = stored.length === 1 ? stored[0] : undefined;
+    return only
+      ? beginOne(only, scope, ttlMs, token)
+      : beginEverywhere(stored, scope, ttlMs, token);
+  }
+
+  /**
    * Claims a key in one statement: inserts it, or takes over a row that has expired or whose
    * request crashed (its lease ran out) with the same fingerprint. Otherwise returns the row as it
    * is. A row inserted by a transaction that committed after this statement's snapshot is
    * invisible to the fallback select, so that case is retried with a fresh snapshot.
-   *
-   * With previous secrets, a row stored under one of them that hasn't expired is treated like
-   * the current key's row: answered as it is, or, if its request crashed and this is the same
-   * request, deleted in the same statement that claims the current key. The crashed request can
-   * then no longer complete it, just as a takeover of the current key's row stops it. Nothing is
-   * ever inserted under a previous secret, so the check can't race with an insert.
    */
-  async function begin(identity: Identity, scope: string, ttlMs: number): Promise<Claim> {
-    const { key, fingerprint } = identity.current;
-    const earlierKeys =
-      identity.previous.length === 0
-        ? null
-        : sql.join(
-            identity.previous.map((stored) => sql`${stored.key}`),
-            sql`, `,
-          );
-    const earlierRequests = sql.join(
-      identity.previous.map((stored) => sql`(${stored.key}, ${stored.fingerprint})`),
-      sql`, `,
-    );
-    const token = randomHex(16);
+  async function beginOne(
+    { key, fingerprint }: Stored,
+    scope: string,
+    ttlMs: number,
+    token: string,
+  ): Promise<Claim> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const rows = rowsOf<{
-        state: "claimed" | "existing" | "earlier";
-        key: string | null;
+        state: "claimed" | "existing";
         fingerprint: string | null;
         response: string | null;
         completed: boolean | null;
       }>(
         await db.execute(sql`
           with input as (select ${now()} as now),
-          ${
-            earlierKeys === null
-              ? sql``
-              : sql`earlier as (
-            select e.key, e.fingerprint, e.response, e.completed_at is not null as completed
-            from ${table} as e, input
-            where e.key in (${earlierKeys}) and e.expires_at > input.now
-            order by e.created_at desc
-            limit 1
-          ),
-          freed as (
-            delete from ${table} as f
-            using earlier, input
-            where f.key = earlier.key and (f.key, f.fingerprint) in (${earlierRequests})
-              and f.completed_at is null and f.locked_until <= input.now
-            returning 1
-          ),`
-          }
           claimed as (
             insert into ${table} as i
               (key, scope, fingerprint, locked_by, locked_until, response, created_at, completed_at, expires_at)
             select ${key}, ${scope}, ${fingerprint}, ${token}, input.now + ${interval(leaseMs)},
               null, input.now, null, input.now + ${interval(ttlMs)}
             from input
-            ${
-              earlierKeys === null
-                ? sql``
-                : sql`where not exists (select 1 from earlier) or exists (select 1 from freed)`
-            }
-            on conflict (key) do update set
-              scope = excluded.scope, fingerprint = excluded.fingerprint,
-              locked_by = excluded.locked_by, locked_until = excluded.locked_until,
-              response = null, created_at = excluded.created_at, completed_at = null,
-              expires_at = excluded.expires_at
-            where (i.expires_at <= excluded.created_at
-                and (i.completed_at is not null or i.locked_until <= excluded.created_at))
-              or (i.completed_at is null and i.locked_until <= excluded.created_at
-                and i.fingerprint = excluded.fingerprint)
+            ${takeover}
             returning 1
           )
-          select 'claimed' as state, null::text as key, null::text as fingerprint,
-            null::text as response, null::boolean as completed
+          select 'claimed' as state, null::text as fingerprint, null::text as response,
+            null::boolean as completed
           from claimed
           union all
-          ${
-            earlierKeys === null
-              ? sql``
-              : sql`select 'earlier', earlier.key, earlier.fingerprint, earlier.response, earlier.completed
-          from earlier
-          where not exists (select 1 from claimed)
-          union all`
-          }
-          select 'existing', null, e.fingerprint, e.response, e.completed_at is not null
+          select 'existing', e.fingerprint, e.response, e.completed_at is not null
           from ${table} as e
-          where e.key = ${key} and not exists (select 1 from claimed)
-            ${earlierKeys === null ? sql`` : sql`and not exists (select 1 from earlier)`}`),
+          where e.key = ${key} and not exists (select 1 from claimed)`),
       );
       const row = rows[0];
       if (row === undefined) continue;
-      if (row.state === "claimed") return { kind: "claimed", token };
-      // A row stored under a previous secret has that secret's fingerprint.
-      const expected =
-        row.state === "earlier"
-          ? identity.previous.find((stored) => stored.key === row.key)?.fingerprint
-          : fingerprint;
-      if (expected === undefined || !timingSafeEqual(row.fingerprint ?? "", expected)) {
-        return { kind: "mismatch" };
-      }
+      if (row.state === "claimed") return { kind: "claimed", token, keys: [key] };
+      if (!timingSafeEqual(row.fingerprint ?? "", fingerprint)) return { kind: "mismatch" };
       if (row.completed === true && row.response !== null) {
         return { kind: "completed", response: row.response };
       }
@@ -269,13 +242,89 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
     return { kind: "in_progress" };
   }
 
+  /**
+   * Claims a key under every secret at once, each row by the same rule as `beginOne`. The claim
+   * only counts if it got every row. Otherwise the rows it didn't get answer, as `beginOne`'s
+   * single row would (a mismatch, a stored result, or "in progress"), and the rows it did get
+   * are given back.
+   */
+  async function beginEverywhere(
+    stored: readonly Stored[],
+    scope: string,
+    ttlMs: number,
+    token: string,
+  ): Promise<Claim> {
+    const keys = stored.map((row) => row.key);
+    const expected = new Map(stored.map((row) => [row.key, row.fingerprint]));
+    const wanted = sql.join(
+      stored.map((row, ord) => sql`(${ord}::int, ${row.key}::text, ${row.fingerprint}::text)`),
+      sql`, `,
+    );
+    const keyList = sql.join(
+      keys.map((key) => sql`${key}::text`),
+      sql`, `,
+    );
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rows = rowsOf<{
+        state: "claimed" | "existing";
+        key: string;
+        fingerprint: string | null;
+        response: string | null;
+        completed: boolean | null;
+      }>(
+        await db.execute(sql`
+          with input as (select ${now()} as now),
+          wanted (ord, key, fingerprint) as (values ${wanted}),
+          claimed as (
+            insert into ${table} as i
+              (key, scope, fingerprint, locked_by, locked_until, response, created_at, completed_at, expires_at)
+            select w.key, ${scope}, w.fingerprint, ${token}, input.now + ${interval(leaseMs)},
+              null, input.now, null, input.now + ${interval(ttlMs)}
+            from wanted as w, input
+            order by w.ord
+            ${takeover}
+            returning i.key
+          )
+          select 'claimed' as state, c.key, null::text as fingerprint, null::text as response,
+            null::boolean as completed
+          from claimed as c
+          union all
+          select 'existing', e.key, e.fingerprint, e.response, e.completed_at is not null
+          from ${table} as e
+          where e.key in (${keyList}) and e.key not in (select key from claimed)`),
+      );
+      const got = rows.filter((row) => row.state === "claimed").map((row) => row.key);
+      if (got.length === keys.length) return { kind: "claimed", token, keys };
+      if (got.length > 0) await release(got, token);
+      const others = rows.filter((row) => row.state === "existing");
+      // Every row it didn't get committed after this statement's snapshot: look again.
+      if (others.length === 0) continue;
+      // Each row carries its own secret's fingerprint. All are compared, so the time taken
+      // doesn't depend on which one differs.
+      const mismatched = others
+        .map((row) => !timingSafeEqual(row.fingerprint ?? "", expected.get(row.key) ?? ""))
+        .reduce((any, differs) => any || differs, false);
+      if (mismatched) return { kind: "mismatch" };
+      const done = others.find((row) => row.completed === true && row.response !== null);
+      if (done?.response) return { kind: "completed", response: done.response };
+      return { kind: "in_progress" };
+    }
+    return { kind: "in_progress" };
+  }
+
+  const keyIn = (keys: readonly string[]) =>
+    sql.join(
+      keys.map((key) => sql`${key}::text`),
+      sql`, `,
+    );
+
   /** Renews the lease every third of its length until the returned function is called. */
-  function holdLease(key: string, token: string): () => void {
+  function holdLease(keys: readonly string[], token: string): () => void {
     const timer = setInterval(() => {
       Promise.resolve(
         db.execute(sql`
             update ${table} set locked_until = ${now()} + ${interval(leaseMs)}
-            where key = ${key} and locked_by = ${token} and completed_at is null`),
+            where key in (${keyIn(keys)}) and locked_by = ${token} and completed_at is null`),
       ).catch((error: unknown) => {
         once.once("warn", "heartbeat", "Could not renew an idempotency key's lease; retrying.", {
           error: errorText(error),
@@ -286,22 +335,43 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
     return () => clearInterval(timer);
   }
 
-  /** Stores the result, unless this request no longer holds the key (its lease ran out). */
+  /**
+   * Stores the result, unless this request no longer holds the key (its lease ran out). A claim
+   * under several secrets locks all its rows first, in key order, and stores the result only if
+   * it still holds every one: a request that another took over part of mustn't half-complete.
+   */
   async function complete(
-    key: string,
+    keys: readonly string[],
     token: string,
     response: string,
     ttlMs: number,
   ): Promise<void> {
     try {
+      const store = sql`response = ${response}, completed_at = input.now,
+            locked_by = null, locked_until = null, expires_at = input.now + ${interval(ttlMs)}`;
       const rows = rowsOf(
-        await db.execute(sql`
+        await db.execute(
+          keys.length === 1
+            ? sql`
           with input as (select ${now()} as now)
-          update ${table} as t set response = ${response}, completed_at = input.now,
-            locked_by = null, locked_until = null, expires_at = input.now + ${interval(ttlMs)}
+          update ${table} as t set ${store}
           from input
-          where t.key = ${key} and t.locked_by = ${token}
-          returning 1`),
+          where t.key = ${keys[0]} and t.locked_by = ${token}
+          returning 1`
+            : sql`
+          with input as (select ${now()} as now),
+          mine as (
+            select m.key from ${table} as m
+            where m.key in (${keyIn(keys)}) and m.locked_by = ${token}
+            order by m.key collate "C"
+            for update
+          ),
+          held as (select count(*) = ${keys.length}::int as every from mine)
+          update ${table} as t set ${store}
+          from input, held
+          where t.key in (select key from mine) and held.every
+          returning 1`,
+        ),
       );
       if (rows.length === 0) {
         logger.warn(
@@ -317,9 +387,11 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
   }
 
   /** Frees the key so the client can retry. If this fails, the lease frees it soon anyway. */
-  async function release(key: string, token: string): Promise<void> {
+  async function release(keys: readonly string[], token: string): Promise<void> {
     try {
-      await db.execute(sql`delete from ${table} where key = ${key} and locked_by = ${token}`);
+      await db.execute(
+        sql`delete from ${table} where key in (${keyIn(keys)}) and locked_by = ${token}`,
+      );
     } catch (error) {
       logger.warn("Could not release an idempotency key; it frees itself when its lease ends.", {
         error: errorText(error),
@@ -369,7 +441,6 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
         clientKey,
         await requestFingerprint(request, custom),
       );
-      const key = identity.current.key;
       const claim = await begin(identity, scope, ttlMs);
       if (claim.kind === "mismatch") return errorResponse("idempotency_key_reused");
       if (claim.kind === "in_progress") return errorResponse("idempotency_key_in_use");
@@ -380,24 +451,29 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
         return errorResponse("idempotency_key_reused");
       }
 
-      const stop = holdLease(key, claim.token);
+      const stop = holdLease(claim.keys, claim.token);
       let response: Response;
       let body: Uint8Array;
       try {
         response = await handler();
         if (response.status < 200 || response.status >= 400) {
           stop();
-          await release(key, claim.token);
+          await release(claim.keys, claim.token);
           return response;
         }
         body = new Uint8Array(await response.arrayBuffer());
       } catch (error) {
         stop();
-        await release(key, claim.token);
+        await release(claim.keys, claim.token);
         throw error;
       }
       stop();
-      await complete(key, claim.token, JSON.stringify(encodeResponse(response, body)), ttlMs);
+      await complete(
+        claim.keys,
+        claim.token,
+        JSON.stringify(encodeResponse(response, body)),
+        ttlMs,
+      );
       // The body was read to store it, so send a copy. Every header, cookies included, is kept.
       return new Response(NULL_BODY_STATUSES.has(response.status) ? null : body, {
         status: response.status,
@@ -433,7 +509,6 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
         input.key,
         custom === undefined ? ["none"] : ["custom", custom],
       );
-      const key = identity.current.key;
 
       const claim = await begin(identity, scope, ttlMs);
       if (claim.kind === "mismatch" || claim.kind === "in_progress") {
@@ -448,7 +523,7 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
         } satisfies RunResult<Value>;
       }
 
-      const stop = holdLease(key, claim.token);
+      const stop = holdLease(claim.keys, claim.token);
       let text: string;
       try {
         const value = await fn();
@@ -463,11 +538,11 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
         }
       } catch (error) {
         stop();
-        await release(key, claim.token);
+        await release(claim.keys, claim.token);
         throw error;
       }
       stop();
-      await complete(key, claim.token, text, ttlMs);
+      await complete(claim.keys, claim.token, text, ttlMs);
       // Return what a replay will return, so the first call and every retry see the same value.
       const stored = JSON.parse(text) as { value?: Value };
       return { ok: true, value: stored.value as Value, replayed: false } satisfies RunResult<Value>;

@@ -1,6 +1,8 @@
 // Changing the secret with previousSecrets: API keys and idempotency keys stored under the old
 // secret are still recognised. Rate limits start over, which needs no test.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { type SQLWrapper, sql } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { hashKey, parseKey } from "../../src/api-keys/format.ts";
@@ -155,6 +157,61 @@ describe("API keys across a change of secret", () => {
     const rotated = keysWith(after);
     expect((await rotated.verify(first)).ok).toBe(true);
     expect((await rotated.verify(rotatedKey.key)).ok).toBe(true);
+  });
+
+  test("the docs' query lists exactly the keys that still need the old secret", async () => {
+    // The query as docs/core-concepts.md prints it, so the docs can't drift from what's tested.
+    const docs = readFileSync(
+      join(import.meta.dir, "..", "..", "docs", "core-concepts.md"),
+      "utf8",
+    );
+    const query = /```sql\n([\s\S]*?)```/
+      .exec(docs.slice(docs.indexOf("**Drop the old secret**")))?.[1]
+      ?.trim()
+      .replace(/;$/, "");
+    if (!query?.includes("from gw_api_keys")) throw new Error("The docs' query has moved.");
+    const listed = async (id: string, stepTwoFinished: Date) => {
+      const bound = sql.join(
+        query.split(":step_2_finished").map((part) => sql.raw(part)),
+        sql`${stepTwoFinished.toISOString()}::timestamptz`,
+      );
+      const rows = await database.current.rows(
+        sql`select 1 from (${bound}) as listed where listed.id = ${id}::uuid`,
+      );
+      return rows.length === 1;
+    };
+
+    const clock = createTestClock(T0);
+    const old = keysWith(before, { clock });
+    const idle = await old.create({ name: "idle", scopes: ["posts:read"] });
+    const { key: oldKey, record } = await old.create({ name: "rotated", scopes: ["posts:read"] });
+    clock.advance("1m");
+    const rotated = await old.rotate(record.id, { grace: "7d" });
+    if (!rotated) throw new Error("rotate() returned null");
+    clock.advance("1m");
+    const stepTwoFinished = clock.now();
+    clock.advance("1m");
+    const stepTwo = keysWith(after, { clock });
+
+    // Not used since the change: listed, and it does need the old secret.
+    expect(await listed(idle.record.id, stepTwoFinished)).toBe(true);
+    expect((await stepTwo.verify(idle.key)).ok).toBe(true);
+    await stepTwo.flush();
+    expect(await listed(idle.record.id, stepTwoFinished)).toBe(false);
+
+    // Rotated before the change, and its old key used in the grace period: that moved nothing,
+    // so the new key still needs the old secret. Before, the query missed this key.
+    expect((await stepTwo.verify(oldKey)).ok).toBe(true);
+    await stepTwo.flush();
+    expect(await listed(record.id, stepTwoFinished)).toBe(true);
+    expect((await keysWith(newOnly, { clock }).verify(rotated.key)).ok).toBe(false);
+
+    // After the grace period a use can only be the new key, and that moves it.
+    clock.advance("7d");
+    expect((await stepTwo.verify(rotated.key)).ok).toBe(true);
+    await stepTwo.flush();
+    expect(await listed(record.id, stepTwoFinished)).toBe(false);
+    expect((await keysWith(newOnly, { clock }).verify(rotated.key)).ok).toBe(true);
   });
 
   test("createGroundwork passes previousSecrets to gw.apiKeys", async () => {
@@ -394,5 +451,180 @@ describe("idempotency across a change of secret", () => {
       value: 1,
       replayed: true,
     });
+  });
+});
+
+describe("idempotency during the two-deploy rollout", () => {
+  const step1: Secrets = { secret: OLD, previousSecrets: [NEW] };
+  const step2: Secrets = { secret: NEW, previousSecrets: [OLD] };
+
+  /**
+   * An instance whose first statement (the claim) runs in a transaction that stays open until
+   * `commit()`, so another instance's claim runs while this one is still uncommitted.
+   */
+  function heldClaim(secrets: Secrets) {
+    const connection = database.current.connect({ max: 2 });
+    const commitNow = deferred();
+    let held: Promise<unknown> | undefined;
+    const db = {
+      execute(query: SQLWrapper) {
+        if (held !== undefined) return connection.db.execute(query);
+        const ran = Promise.withResolvers<unknown>();
+        held = connection.db
+          .transaction(async (tx) => {
+            ran.resolve(await tx.execute(query));
+            await commitNow.promise;
+          })
+          .catch(ran.reject);
+        return ran.promise;
+      },
+    };
+    return {
+      instance: idempotencyWith({ db: db as never }, secrets),
+      commit: async () => {
+        commitNow.resolve();
+        await held;
+      },
+    };
+  }
+
+  async function someoneWaitsForALockOr(stop: () => boolean) {
+    const deadline = Date.now() + 10_000;
+    while (!stop()) {
+      const [row] = await database.current.rows<{ waiting: number }>(
+        sql`select count(*)::int as waiting from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'`,
+      );
+      if ((row?.waiting ?? 0) > 0) return;
+      if (Date.now() > deadline) throw new Error("timed out");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  for (const [firstName, first, secondName, second] of [
+    ["step 1", step1, "step 2", step2],
+    ["step 2", step2, "step 1", step1],
+  ] as const) {
+    test(`a copy on ${secondName} waits for the claim on ${firstName}, and doesn't run`, async () => {
+      const input = { scope: "rollout", key: unique("copy") };
+      const held = heldClaim(first);
+      const release = deferred();
+      let firstRan = false;
+      let secondRan = false;
+      const firstRun = held.instance.run(input, async () => {
+        firstRan = true;
+        await release.promise;
+        return "first";
+      });
+      await waitFor(() => firstRan);
+
+      const secondRun = idempotencyWith(database.current, second).run(input, () => {
+        secondRan = true;
+        return "second";
+      });
+      // Before, the second claim used another key, didn't wait, and ran the work again.
+      await someoneWaitsForALockOr(() => secondRan);
+      await held.commit();
+      // The first is still running until it's released, so the second can only see it running.
+      expect(await secondRun).toEqual({ ok: false, reason: "in_progress" });
+      expect(secondRan).toBe(false);
+      release.resolve();
+      expect(await firstRun).toEqual({ ok: true, value: "first", replayed: false });
+
+      // Once it's done, both steps replay it, and so does an instance after the old secret is
+      // dropped: the claim was stored under the new secret too, whichever step made it.
+      for (const secrets of [first, second, newOnly]) {
+        expect(await idempotencyWith(database.current, secrets).run(input, () => "again")).toEqual({
+          ok: true,
+          value: "first",
+          replayed: true,
+        });
+      }
+    }, 30_000);
+  }
+
+  test("simultaneous copies on both steps run once", async () => {
+    let runs = 0;
+    const instances = [step1, step2].map((secrets) =>
+      idempotencyWith(database.current.connect({ max: 10 }), secrets),
+    );
+    for (let round = 0; round < 3; round++) {
+      const keys = Array.from({ length: 50 }, () => unique("pair"));
+      await Promise.all(
+        keys.flatMap((key) =>
+          instances.map((instance) =>
+            instance?.run({ scope: "pairs", key }, () => {
+              runs += 1;
+              return 1;
+            }),
+          ),
+        ),
+      );
+    }
+    expect(runs).toBe(150);
+  }, 60_000);
+
+  test("a request that outlives its ttl under the old secret isn't run again after the change", async () => {
+    const clock = createTestClock(T0);
+    const input = { scope: "slow", key: unique("slow"), ttl: "2s" as const };
+    const release = deferred();
+    let started = false;
+    const slow = idempotencyWith(database.current.connect(), before, { clock, lease: "30s" }).run(
+      input,
+      async () => {
+        started = true;
+        await release.promise;
+        return "slow";
+      },
+    );
+    await waitFor(() => started);
+    clock.advance("5s");
+
+    // Past its ttl, but its lease is live: the same secret says in_progress, and so must this.
+    let ranAgain = false;
+    expect(
+      await idempotencyWith(database.current, after, { clock, lease: "30s" }).run(input, () => {
+        ranAgain = true;
+        return "again";
+      }),
+    ).toEqual({ ok: false, reason: "in_progress" });
+    expect(ranAgain).toBe(false);
+    release.resolve();
+    await slow;
+  });
+
+  test("a claim taken over in part can't store its result", async () => {
+    const clock = createTestClock(T0);
+    const input = { scope: "partial", key: unique("partial") };
+    const release = deferred();
+    let started = false;
+    // Claimed on step 2, under the new secret and the old one…
+    const zombie = idempotencyWith(database.current.connect(), step2, { clock, lease: "30s" });
+    const zombieRun = zombie.run(input, async () => {
+      started = true;
+      await release.promise;
+      return "zombie";
+    });
+    await waitFor(() => started);
+    clock.advance("31s");
+    // …then its worker stalls, and an instance that only knows the new secret takes over that row.
+    const rescuer = idempotencyWith(database.current, newOnly, { clock, lease: "30s" });
+    expect(await rescuer.run(input, () => "rescuer")).toEqual({
+      ok: true,
+      value: "rescuer",
+      replayed: false,
+    });
+
+    // The stalled worker finishes: it still holds the old secret's row, but not every row.
+    release.resolve();
+    expect(await zombieRun).toEqual({ ok: true, value: "zombie", replayed: false });
+    expect(zombie.logger.lines.map((line) => line.message)).toEqual([
+      expect.stringContaining("lease ran out"),
+    ]);
+    for (const secrets of [step2, newOnly]) {
+      expect(
+        await idempotencyWith(database.current, secrets, { clock }).run(input, () => "again"),
+      ).toMatchObject({ ok: true, value: "rescuer", replayed: true });
+    }
   });
 });
