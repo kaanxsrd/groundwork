@@ -41,6 +41,20 @@ describe("backoffDelayMs", () => {
   });
 });
 
+describe("work()", () => {
+  test("an idle worker doesn't pile up abort listeners on its signal", async () => {
+    const { getEventListeners } = await import("node:events");
+    const jobs = createJobs({ db: recordingDb().db, table, schedulesTable, logger: quiet });
+    jobs.define("idle.job", { run: () => {} });
+    const stop = new AbortController();
+    const worker = jobs.work({ signal: stop.signal, pollInterval: "10ms" });
+    await new Promise((resolve) => setTimeout(resolve, 200)); // about 20 idle polls
+    expect(getEventListeners(stop.signal, "abort").length).toBeLessThanOrEqual(1);
+    stop.abort();
+    await worker;
+  });
+});
+
 describe("a backoff ladder", () => {
   test("waits each step in turn, then repeats the last one", () => {
     const ladder = [30_000, 120_000, 600_000];

@@ -710,6 +710,8 @@ export function createJobs(options: JobsOptions): Jobs {
         for (const promise of inFlight) promise.then(done, done);
         function done() {
           clearTimeout(timer);
+          // Without this, every idle poll of a long-running worker would leave a listener behind.
+          settings.signal?.removeEventListener("abort", done);
           resolve();
         }
       });
