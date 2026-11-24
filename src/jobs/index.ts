@@ -30,6 +30,8 @@ export { backoffDelayMs } from "./backoff.ts";
 export { createJobs, type JobsOptions } from "./jobs.ts";
 export type {
   BackoffOptions,
+  EnqueueManyItem,
+  EnqueueManyOptions,
   EnqueueOptions,
   EnqueueResult,
   JobContext,

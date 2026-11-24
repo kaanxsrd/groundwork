@@ -105,9 +105,29 @@ export interface EnqueueResult {
   readonly created: boolean;
 }
 
+/** One job for `enqueueMany`: its payload, and any of `enqueue`'s options except `tx`. */
+export interface EnqueueManyItem<TInput> extends Omit<EnqueueOptions, "tx"> {
+  readonly payload: TInput;
+}
+
+export interface EnqueueManyOptions {
+  /** Enqueue inside this transaction: the jobs only exist if it commits. */
+  readonly tx?: GroundworkDatabase | undefined;
+}
+
 export interface JobHandle<TType extends string, TInput> {
   readonly type: TType;
   enqueue(payload: TInput, options?: EnqueueOptions): Promise<EnqueueResult>;
+  /**
+   * Enqueues up to 1,000 jobs of this type in one statement, each with its own options. Every
+   * job is checked first, so one bad job enqueues none. Results are in the same order as the
+   * jobs. A `dedupeKey` works as it does for `enqueue`, also between jobs in the same call: the
+   * first one is created, and the others return its id.
+   */
+  enqueueMany(
+    jobs: readonly EnqueueManyItem<TInput>[],
+    options?: EnqueueManyOptions,
+  ): Promise<EnqueueResult[]>;
 }
 
 export interface ScheduleOptions {

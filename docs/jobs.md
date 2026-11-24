@@ -79,6 +79,22 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
 - `runAt` / `delay`: not before a time, or not before `"10m"` from now.
 - `dedupeKey`: while a job of the same type and key is pending or running, enqueueing it again returns that job (`created: false`) instead of adding another, even under concurrent enqueues. Once the job finishes, the key is free again. For "only ever once" (one receipt per order, forever), record that in your own table, in the same transaction.
 
+### Many at once
+
+`enqueueMany` enqueues up to 1,000 jobs of one type in one statement, instead of one round trip each. Each job takes `enqueue`'s options, except `tx`, which applies to the whole call:
+
+```ts
+const results = await sendReceipt.enqueueMany(
+  orders.map((order) => ({ payload: { orderId: order.id }, dedupeKey: `receipt:${order.id}` })),
+  { tx },
+);
+// → [{ id, created }, …], in the same order as the jobs
+```
+
+- Every job is checked before anything is sent, so one bad job enqueues none. The error says which: `jobs[2]: Invalid payload for job type "email.receipt": …`.
+- `dedupeKey` works as it does for `enqueue`, including between jobs in the same call: the first one is created, and the others get its id with `created: false`.
+- For more than 1,000 jobs, call it once per 1,000, in the same `tx` if they should commit together.
+
 ## How jobs run
 
 - **Claiming:** a worker claims up to `concurrency` jobs in one statement, using `FOR UPDATE SKIP LOCKED` (so workers never wait on each other), ordered by priority and due time through a partial index.

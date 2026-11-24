@@ -1,11 +1,11 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { type SQL, sql } from "drizzle-orm";
 import { toJsonValue } from "../audit/json.ts";
 import type { Clock } from "../internal/clock.ts";
 import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
-import { errorText, GroundworkError } from "../internal/errors.ts";
+import { errorText, GroundworkError, isGroundworkError } from "../internal/errors.ts";
 import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { type StandardSchemaV1, validateWith } from "../internal/standard-schema.ts";
@@ -18,6 +18,8 @@ import {
 } from "../schema/jobs.ts";
 import { backoffDelayMs, ladderDelayMs } from "./backoff.ts";
 import type {
+  EnqueueManyItem,
+  EnqueueManyOptions,
   EnqueueOptions,
   EnqueueResult,
   JobContext,
@@ -60,6 +62,7 @@ export interface JobsOptions {
 const NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,100}$/;
 const SCHEDULE_PREFIX = "schedule:";
 const MAX_LIST = 1_000;
+const MAX_ENQUEUE_MANY = 1_000;
 const PRUNE_BATCH = 5_000;
 const MAX_ERROR_LENGTH = 2_000;
 const MAX_BACKOFF_STEPS = 100;
@@ -340,11 +343,22 @@ export function createJobs(options: JobsOptions): Jobs {
     return toJsonValue(payload);
   }
 
-  async function enqueue(
+  /** A job checked and ready to insert. `runAt` and `delayMs` are both null for "now". */
+  interface Prepared {
+    readonly json: unknown;
+    readonly priority: number;
+    readonly maxAttempts: number;
+    readonly dedupeKey: string | null;
+    readonly runAt: Date | null;
+    readonly delayMs: number | null;
+  }
+
+  /** Validates one job's payload and options, as `enqueue` and `enqueueMany` both need. */
+  async function prepare(
     handler: Handler,
     payload: unknown,
-    enqueueOptions: EnqueueOptions = {},
-  ): Promise<EnqueueResult> {
+    enqueueOptions: Omit<EnqueueOptions, "tx">,
+  ): Promise<Prepared> {
     const json = await payloadFor(handler, payload);
     const priority =
       enqueueOptions.priority === undefined
@@ -367,16 +381,35 @@ export function createJobs(options: JobsOptions): Jobs {
     if (enqueueOptions.runAt !== undefined && enqueueOptions.delay !== undefined) {
       throw new GroundworkError("invalid_argument", "Pass runAt or delay, not both.");
     }
-    let runAt: SQL = sql`input.now`;
+    let runAt: Date | null = null;
+    let delayMs: number | null = null;
     if (enqueueOptions.runAt !== undefined) {
       if (!(enqueueOptions.runAt instanceof Date) || Number.isNaN(enqueueOptions.runAt.getTime())) {
         throw new GroundworkError("invalid_argument", "runAt must be a valid Date.");
       }
-      runAt = sql`${enqueueOptions.runAt.toISOString()}::timestamptz`;
+      runAt = enqueueOptions.runAt;
     } else if (enqueueOptions.delay !== undefined) {
-      const delayMs = parseDuration(enqueueOptions.delay, { label: "delay" });
-      runAt = sql`input.now + ${delayMs}::float8 * interval '1 millisecond'`;
+      delayMs = parseDuration(enqueueOptions.delay, { label: "delay" });
     }
+    return { json, priority, maxAttempts, dedupeKey, runAt, delayMs };
+  }
+
+  async function enqueue(
+    handler: Handler,
+    payload: unknown,
+    enqueueOptions: EnqueueOptions = {},
+  ): Promise<EnqueueResult> {
+    const { json, priority, maxAttempts, dedupeKey, ...when } = await prepare(
+      handler,
+      payload,
+      enqueueOptions,
+    );
+    const runAt: SQL =
+      when.runAt !== null
+        ? sql`${when.runAt.toISOString()}::timestamptz`
+        : when.delayMs !== null
+          ? sql`input.now + ${when.delayMs}::float8 * interval '1 millisecond'`
+          : sql`input.now`;
 
     const target = enqueueOptions.tx ?? db;
     const rows = rowsOf<{ id: string; created: boolean }>(
@@ -408,6 +441,136 @@ export function createJobs(options: JobsOptions): Jobs {
     if (!existing)
       throw new Error("enqueue found neither a new job nor the duplicate it collided with");
     return { id: existing.id, created: false };
+  }
+
+  /**
+   * Enqueues jobs of one type in one statement. Every job is checked first, so a bad one
+   * enqueues nothing. Ids are generated here, so each result can be matched to its job whatever
+   * order Postgres inserts them in. Of the jobs that share a `dedupeKey`, only the first is
+   * inserted, as if they'd been enqueued one after another.
+   */
+  async function enqueueMany(
+    handler: Handler,
+    items: readonly EnqueueManyItem<unknown>[],
+    manyOptions: EnqueueManyOptions = {},
+  ): Promise<EnqueueResult[]> {
+    if (!Array.isArray(items)) {
+      throw new GroundworkError(
+        "invalid_argument",
+        "enqueueMany needs a list of jobs, such as [{ payload }, { payload, dedupeKey }].",
+      );
+    }
+    if (items.length > MAX_ENQUEUE_MANY) {
+      throw new GroundworkError(
+        "invalid_argument",
+        `enqueueMany takes at most ${MAX_ENQUEUE_MANY} jobs at a time; split larger batches.`,
+      );
+    }
+    if (typeof manyOptions !== "object" || manyOptions === null) {
+      throw new GroundworkError("invalid_argument", "enqueueMany's options must be an object.");
+    }
+    if (items.length === 0) return [];
+
+    const prepared = await Promise.all(
+      items.map(async (item, index) => {
+        try {
+          // Without this, a bare payload would be read as options and enqueue no payload at all.
+          if (typeof item !== "object" || item === null || !("payload" in item)) {
+            throw new GroundworkError(
+              "invalid_argument",
+              "each job needs a payload: { payload, dedupeKey?, delay?, … }.",
+            );
+          }
+          return await prepare(handler, item.payload, item);
+        } catch (error) {
+          if (!isGroundworkError(error)) throw error;
+          throw new GroundworkError(error.code, `jobs[${index}]: ${error.message}`, {
+            cause: error,
+          });
+        }
+      }),
+    );
+    const records = prepared.map((job, i) => ({
+      i,
+      id: randomUUID(),
+      // As text, so a null payload is stored as JSON null, as enqueue() stores it.
+      payload: JSON.stringify(job.json),
+      priority: job.priority,
+      max_attempts: job.maxAttempts,
+      run_at: job.runAt?.toISOString() ?? null,
+      delay_ms: job.delayMs,
+      dedupe_key: job.dedupeKey,
+    }));
+
+    const target = manyOptions.tx ?? db;
+    const rows = rowsOf<{ kind: "inserted" | "existing"; id: string; dedupe_key: string | null }>(
+      await target.execute(sql`
+        with input as materialized (select ${now()} as now),
+        items as (
+          select * from jsonb_to_recordset(${jsonbParam(JSON.stringify(records))}) as t(
+            i int, id uuid, payload text, priority int, max_attempts int, run_at timestamptz,
+            delay_ms float8, dedupe_key text)
+        ),
+        firsts as (
+          select * from items where dedupe_key is null
+          union all
+          (select distinct on (dedupe_key) * from items where dedupe_key is not null
+            order by dedupe_key, i)
+        ),
+        inserted as (
+          insert into ${table} as j (id, type, payload, priority, max_attempts, run_at, dedupe_key, created_at, updated_at)
+          select f.id, ${handler.type}::text, f.payload::jsonb, f.priority, f.max_attempts,
+            coalesce(f.run_at, input.now + coalesce(f.delay_ms, 0) * interval '1 millisecond'),
+            f.dedupe_key, input.now, input.now
+          from firsts as f, input
+          order by f.i
+          on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
+          returning j.id::text as id, j.dedupe_key
+        )
+        select 'inserted' as kind, id, dedupe_key from inserted
+        union all
+        select 'existing', j.id::text, j.dedupe_key from ${table} as j
+        where j.type = ${handler.type}::text and j.status in ('pending', 'running')
+          and j.dedupe_key in (select dedupe_key from items where dedupe_key is not null)`),
+    );
+
+    const inserted = new Set<string>();
+    const byKey = new Map<string, string>();
+    for (const row of rows) {
+      if (row.kind === "inserted") inserted.add(row.id);
+      if (row.dedupe_key !== null) byKey.set(row.dedupe_key, row.id);
+    }
+    // A duplicate that committed after this statement's snapshot was taken: look those up again.
+    const unknownKeys = [
+      ...new Set(
+        records.flatMap((record) =>
+          !inserted.has(record.id) && record.dedupe_key !== null && !byKey.has(record.dedupe_key)
+            ? [record.dedupe_key]
+            : [],
+        ),
+      ),
+    ];
+    if (unknownKeys.length > 0) {
+      const found = rowsOf<{ id: string; dedupe_key: string }>(
+        await target.execute(sql`
+          select id::text as id, dedupe_key from ${table}
+          where type = ${handler.type}::text and status in ('pending', 'running')
+            and dedupe_key in (${sql.join(
+              unknownKeys.map((key) => sql`${key}::text`),
+              sql`, `,
+            )})`),
+      );
+      for (const row of found) byKey.set(row.dedupe_key, row.id);
+    }
+
+    return records.map((record) => {
+      if (inserted.has(record.id)) return { id: record.id, created: true };
+      const existing = record.dedupe_key === null ? undefined : byKey.get(record.dedupe_key);
+      if (existing === undefined) {
+        throw new Error("enqueueMany found neither a new job nor the duplicate it collided with");
+      }
+      return { id: existing, created: false };
+    });
   }
 
   // ── Schedules ──────────────────────────────────────────────────────────────
@@ -805,6 +968,10 @@ export function createJobs(options: JobsOptions): Jobs {
         type,
         enqueue: (payload: unknown, enqueueOptions?: EnqueueOptions) =>
           enqueue(handler, payload, enqueueOptions),
+        enqueueMany: (
+          items: readonly EnqueueManyItem<unknown>[],
+          manyOptions?: EnqueueManyOptions,
+        ) => enqueueMany(handler, items, manyOptions),
       } as JobHandle<string, unknown>;
     },
 

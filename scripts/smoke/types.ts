@@ -13,7 +13,12 @@ import {
 import { createApiKeys, type VerifyResult } from "@vantedev/groundwork/api-keys";
 import { type AuditEntry, createAuditLog, diff } from "@vantedev/groundwork/audit";
 import { createIdempotency, type Jsonify, type RunResult } from "@vantedev/groundwork/idempotency";
-import { createJobs, type RunSummary, type StandardSchemaV1 } from "@vantedev/groundwork/jobs";
+import {
+  createJobs,
+  type EnqueueResult,
+  type RunSummary,
+  type StandardSchemaV1,
+} from "@vantedev/groundwork/jobs";
 import { createRouteHelpers, getClientIp, jobsRoute } from "@vantedev/groundwork/next";
 import {
   createRateLimiter,
@@ -176,6 +181,17 @@ const receipt = jobs.define("email.receipt", {
 receipt.enqueue({ orderId: "o1" }, { tx: jsDb, dedupeKey: "receipt:o1", delay: "5m" });
 // @ts-expect-error orderId must be a string
 receipt.enqueue({ orderId: 1 });
+const batch: Promise<EnqueueResult[]> = receipt.enqueueMany(
+  [
+    { payload: { orderId: "o1" }, dedupeKey: "receipt:o1" },
+    { payload: { orderId: "o2" }, delay: "1m" },
+  ],
+  { tx: jsDb },
+);
+// @ts-expect-error orderId must be a string
+receipt.enqueueMany([{ payload: { orderId: 1 } }]);
+// @ts-expect-error tx is for the whole call, not one job
+receipt.enqueueMany([{ payload: { orderId: "o3" }, tx: jsDb }]);
 const annotated = jobs.define("user.welcome", {
   run(payload: { userId: number }) {
     return payload.userId;
@@ -246,4 +262,4 @@ const ip: string | null = getClientIp(new Headers(), { trustProxy: "vercel" });
 getClientIp(new Headers(), { trustProxy: "fly" });
 
 void [window, noUnit, code, opsName, result, retry, recorded, page, verified, worked, maybeSubject];
-void [ran, asDate, handled, config, typedParams, cron, ip];
+void [ran, asDate, handled, config, typedParams, cron, ip, batch];

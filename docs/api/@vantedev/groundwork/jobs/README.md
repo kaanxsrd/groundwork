@@ -29,6 +29,90 @@ await jobs.work({ concurrency: 4, signal });
 
 ## Interfaces
 
+### EnqueueManyItem
+
+One job for `enqueueMany`: its payload, and any of `enqueue`'s options except `tx`.
+
+#### Extends
+
+- `Omit`\<[`EnqueueOptions`](#enqueueoptions), `"tx"`\>
+
+#### Type Parameters
+
+##### TInput
+
+`TInput`
+
+#### Properties
+
+##### dedupeKey?
+
+> `readonly` `optional` **dedupeKey?**: `string`
+
+While a job of this type with this key is pending or running, enqueueing it again does nothing.
+
+###### Inherited from
+
+[`EnqueueOptions`](#enqueueoptions).[`dedupeKey`](#dedupekey-1)
+
+##### delay?
+
+> `readonly` `optional` **delay?**: `` `${number}ms` `` \| `` `${number}s` `` \| `` `${number}m` `` \| `` `${number}h` `` \| `` `${number}d` `` \| `` `${number}w` ``
+
+Not before this long from now.
+
+###### Inherited from
+
+[`EnqueueOptions`](#enqueueoptions).[`delay`](#delay-1)
+
+##### maxAttempts?
+
+> `readonly` `optional` **maxAttempts?**: `number`
+
+Overrides the type's `maxAttempts`.
+
+###### Inherited from
+
+[`EnqueueOptions`](#enqueueoptions).[`maxAttempts`](#maxattempts-1)
+
+##### payload
+
+> `readonly` **payload**: `TInput`
+
+##### priority?
+
+> `readonly` `optional` **priority?**: `number`
+
+Overrides the type's priority.
+
+###### Inherited from
+
+[`EnqueueOptions`](#enqueueoptions).[`priority`](#priority-1)
+
+##### runAt?
+
+> `readonly` `optional` **runAt?**: `Date`
+
+Not before this time.
+
+###### Inherited from
+
+[`EnqueueOptions`](#enqueueoptions).[`runAt`](#runat-1)
+
+***
+
+### EnqueueManyOptions
+
+#### Properties
+
+##### tx?
+
+> `readonly` `optional` **tx?**: [`GroundworkDatabase`](../../groundwork.md#groundworkdatabase)
+
+Enqueue inside this transaction: the jobs only exist if it commits.
+
+***
+
 ### EnqueueOptions
 
 #### Properties
@@ -391,6 +475,29 @@ Why a job failed for good, passed to `onExhausted`. Never includes the payload.
 ###### Returns
 
 `Promise`\<[`EnqueueResult`](#enqueueresult)\>
+
+##### enqueueMany()
+
+> **enqueueMany**(`jobs`, `options?`): `Promise`\<[`EnqueueResult`](#enqueueresult)[]\>
+
+Enqueues up to 1,000 jobs of this type in one statement, each with its own options. Every
+job is checked first, so one bad job enqueues none. Results are in the same order as the
+jobs. A `dedupeKey` works as it does for `enqueue`, also between jobs in the same call: the
+first one is created, and the others return its id.
+
+###### Parameters
+
+###### jobs
+
+readonly [`EnqueueManyItem`](#enqueuemanyitem)\<`TInput`\>[]
+
+###### options?
+
+[`EnqueueManyOptions`](#enqueuemanyoptions)
+
+###### Returns
+
+`Promise`\<[`EnqueueResult`](#enqueueresult)[]\>
 
 ***
 
@@ -940,7 +1047,7 @@ What a handler gets besides its payload.
 
 ###### Inherited from
 
-[`JobContext`](#jobcontext).[`maxAttempts`](#maxattempts-1)
+[`JobContext`](#jobcontext).[`maxAttempts`](#maxattempts-2)
 
 ##### scheduledAt
 
