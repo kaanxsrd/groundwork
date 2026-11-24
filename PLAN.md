@@ -380,7 +380,8 @@ Don't start the next phase until I approve.
 - [x] VaultDrop: rate limiting, jobs, idempotency. *Merged 2026-11-20.*
 - [x] bubblehouse-dk: audit, mail outbox through jobs. *Decided 2026-11-23: neither moves; bubblehouse-dk keeps both. It uses groundwork's rate limiting instead (see the log).*
 - [x] For each app, record the lines removed and any API pain it exposed, and fix that pain in groundwork, not in the app. *Recorded below; fixed in 0.2.0 (released 2026-11-23). Hookline's web API got rate limiting too.*
-- **1.0 when:** at least 2 apps run it in production, there are no open correctness bugs, and the public API is documented and stable.
+- [ ] Move to Drizzle 1.0 once it's released (decided 2026-11-24, section 9): peer `^1.0.0`, tables typed for 1.0, `tests/migrations` converted with `drizzle-kit up`, the test harness's database type, the docs (the quickstart's `drizzle()` call, `drizzle-kit up` in the migration notes), the smoke test's driver types, and the five apps.
+- **1.0 when:** at least 2 apps run it in production, there are no open correctness bugs, and the public API is documented and stable. *Since 2026-11-24, also after the move to Drizzle 1.0.*
 
 ## 8. Reference code (sibling folders)
 
@@ -412,7 +413,7 @@ Read these before writing each module. Keep what works and fix what section 1 ca
 - **Minimum Postgres version.** **Decided 2026-11-19: 16. CI tests 16 and 18.**
 - **Default table prefix:** `gw_`, or plain names (`rate_limits`) that might clash with tables the apps already have? **Decided 2026-11-19: `gw_`.**
 - **Faultline and PostgreSQL 15.** Faultline's docs promised PG15+, but groundwork's minimum is 16. **Decided 2026-11-23: Faultline requires 16.** Its images already ran 17; only its docs changed.
-- **Drizzle 1.0.** It's at `1.0.0-rc.6`. groundwork's runtime works on it since the 2026-11-24 fix, but the table types are tied to the Drizzle major groundwork is built against (see the log). Choose: drop 0.45 for 1.0 in a 0.x minor once Drizzle 1.0 is out, and make that the line groundwork 1.0 freezes; widen the peer to `^0.45.0 || ^1.0.0` now, with tables typed for 0.45 only; or ship groundwork 1.0 on 0.45 and move to Drizzle 1.0 in 2.0. **Open.**
+- **Drizzle 1.0.** It's at `1.0.0-rc.6`. groundwork's runtime works on it since the 2026-11-24 fix, but the table types are tied to the Drizzle major groundwork is built against (see the log). The choices were: drop 0.45 for 1.0 in a 0.x minor once Drizzle 1.0 is out, and make that the line groundwork 1.0 freezes; widen the peer to `^0.45.0 || ^1.0.0` now, with tables typed for 0.45 only; or ship groundwork 1.0 on 0.45 and move to Drizzle 1.0 in 2.0. **Decided 2026-11-24: the first.** groundwork stays on 0.45 until Drizzle 1.0 is released, then a 0.x minor moves to it, and groundwork 1.0 comes after that move. Until then CI runs the suite against Drizzle's `rc` tag.
 - **bubblehouse-dk's audit log and mail outbox.** **Decided 2026-11-23: both stay bubblehouse-dk's own.** The outbox works and sends a live shop's payment mail. The audit log would need renamed columns at six readers, new ids and an import that duplicates on re-runs, for no new capability. 0.3.0's retry ladder would cover the outbox's retry schedule if it ever moves.
 
 ## 10. Decisions log
@@ -714,6 +715,7 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - **Types:** groundwork's own API accepts a Drizzle 1.0 database as it is (`GroundworkDatabase` is structural). The table types don't carry over: the emitted `.d.ts` spells out the installed Drizzle's column types (`PgColumn<{ columnType: "PgUUID" … }>` from 0.45, `PgBuildColumn` from 1.0), so a package built against 0.45 can't be used in `db.select().from(tables.auditLog)` on 1.0, and the other way round. `docs/audit.md` and `docs/schema.md` show such queries. One package can't type its tables for both majors without types that pick a branch by Drizzle version and report errors under `skipLibCheck: false`.
   - **Migrations:** drizzle-kit 1.0 refuses the old folder format until `drizzle-kit up` converts it (Drizzle's own one-time step), and then finds no changes in the fixture schema. A fresh 1.0 `generate` gives the same DDL in a new spelling (`PRIMARY KEY` without `NOT NULL`, no `USING btree`). Drizzle 1.0's `migrate()` throws on a folder with `meta/_journal.json`, so the test harness and the smoke test would need converted migrations to run on 1.0.
   - The peer range stays `^0.45.0` until the owner decides how to support 1.0 (section 9).
+- 2026-11-24: The owner chose to move to Drizzle 1.0 once it's released, and to hold groundwork 1.0 until then. A new CI job, `drizzle-next`, installs `drizzle-orm@rc` and `drizzle-kit@rc`, converts `tests/migrations` with `drizzle-kit up`, type-checks `src/`, checks drift, and runs the integration suite with both drivers on Postgres 18. Run locally on rc.6, everything passes (176 tests per driver), and the test template is built by Drizzle 1.0's own `migrate()`. The job has `continue-on-error`, so a new release candidate can break it without blocking `main`. When Drizzle 1.0 is out, the move replaces it.
 
 ## 11. Alternatives check (2026-11-19)
 
