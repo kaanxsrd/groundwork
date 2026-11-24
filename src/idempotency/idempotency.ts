@@ -318,13 +318,34 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
       sql`, `,
     );
 
+  /**
+   * This claim's rows, locked in byte order. Every statement that changes several rows of one
+   * claim locks them first, so they're always taken in the order claims take them. Postgres's own
+   * order (an index's collation, or where rows sit on disk) can differ, and two statements that
+   * take shared rows in different orders can deadlock.
+   */
+  const lockMine = (keys: readonly string[], token: string, extra: SQL = sql``) => sql`
+    mine as (
+      select m.key from ${table} as m
+      where m.key in (${keyIn(keys)}) and m.locked_by = ${token} ${extra}
+      order by m.key collate "C"
+      for update
+    )`;
+
   /** Renews the lease every third of its length until the returned function is called. */
   function holdLease(keys: readonly string[], token: string): () => void {
+    const renew = sql`locked_until = ${now()} + ${interval(leaseMs)}`;
     const timer = setInterval(() => {
       Promise.resolve(
-        db.execute(sql`
-            update ${table} set locked_until = ${now()} + ${interval(leaseMs)}
-            where key in (${keyIn(keys)}) and locked_by = ${token} and completed_at is null`),
+        db.execute(
+          keys.length === 1
+            ? sql`
+            update ${table} set ${renew}
+            where key = ${keys[0]} and locked_by = ${token} and completed_at is null`
+            : sql`
+            with ${lockMine(keys, token, sql`and m.completed_at is null`)}
+            update ${table} set ${renew} where key in (select key from mine)`,
+        ),
       ).catch((error: unknown) => {
         once.once("warn", "heartbeat", "Could not renew an idempotency key's lease; retrying.", {
           error: errorText(error),
@@ -360,12 +381,7 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
           returning 1`
             : sql`
           with input as (select ${now()} as now),
-          mine as (
-            select m.key from ${table} as m
-            where m.key in (${keyIn(keys)}) and m.locked_by = ${token}
-            order by m.key collate "C"
-            for update
-          ),
+          ${lockMine(keys, token)},
           held as (select count(*) = ${keys.length}::int as every from mine)
           update ${table} as t set ${store}
           from input, held
@@ -390,7 +406,10 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
   async function release(keys: readonly string[], token: string): Promise<void> {
     try {
       await db.execute(
-        sql`delete from ${table} where key in (${keyIn(keys)}) and locked_by = ${token}`,
+        keys.length === 1
+          ? sql`delete from ${table} where key = ${keys[0]} and locked_by = ${token}`
+          : sql`with ${lockMine(keys, token)}
+            delete from ${table} where key in (select key from mine)`,
       );
     } catch (error) {
       logger.warn("Could not release an idempotency key; it frees itself when its lease ends.", {
@@ -561,6 +580,9 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
                 where e.expires_at <= input.now
                   and (e.completed_at is not null or e.locked_until <= input.now)
                 limit ${CLEANUP_BATCH}
+                -- Rows a claim is taking over are skipped, not waited for: a claim under several
+                -- secrets holds some of its rows while it takes the others, so waiting could deadlock.
+                for update of e skip locked
               )
               returning 1
             )
