@@ -1,6 +1,13 @@
 import { type SQL, sql } from "drizzle-orm";
 import type { Clock } from "../internal/clock.ts";
-import { lazySubkey, randomHex, type SecretSource, timingSafeEqual } from "../internal/crypto.ts";
+import {
+  lazyPreviousSubkeys,
+  lazySubkey,
+  type PreviousSecretsSource,
+  randomHex,
+  type SecretSource,
+  timingSafeEqual,
+} from "../internal/crypto.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
@@ -15,7 +22,7 @@ import {
   isStoredResponse,
   parseIdempotencyKey,
 } from "./http.ts";
-import { createKeyHasher } from "./keys.ts";
+import { createKeyHasher, type KeyHasher } from "./keys.ts";
 import type { HandleOptions, Idempotency, Jsonify, RunInput, RunResult } from "./types.ts";
 
 export interface IdempotencyOptions {
@@ -28,6 +35,12 @@ export interface IdempotencyOptions {
    * as HMACs with a subkey derived from it. `cleanup()` never needs it.
    */
   readonly secret: SecretSource;
+  /**
+   * Secrets used before `secret`. A key stored under one of them is still recognised until it
+   * expires, so a retry that straddles a change of secret is replayed, not run again. See
+   * "Rotating the secret" in the core-concepts docs.
+   */
+  readonly previousSecrets?: PreviousSecretsSource | undefined;
   /** How long a completed result is replayed. Defaults to `"24h"`, as Stripe and VaultDrop do. */
   readonly ttl?: Duration | undefined;
   /**
@@ -41,6 +54,20 @@ export interface IdempotencyOptions {
   /** Defaults to `console` (warnings and errors only). */
   readonly logger?: Logger | undefined;
 }
+
+/** How one key, and what it's used for, is stored under one secret. */
+interface Stored {
+  readonly key: string;
+  readonly fingerprint: string;
+}
+
+/** The key under the current secret, and under each previous one. */
+interface Identity {
+  readonly current: Stored;
+  readonly previous: readonly Stored[];
+}
+
+type FingerprintParts = readonly (string | Uint8Array)[];
 
 type Claim =
   | { readonly kind: "claimed"; readonly token: string }
@@ -111,37 +138,89 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
     ttl === undefined ? defaultTtlMs : parseDuration(ttl, { label: "ttl", minMs: 1_000 });
 
   const hasher = createKeyHasher(subkey);
-  const storageKey = hasher.storageKey;
-  const fingerprintOf = hasher.fingerprint;
+  const previousSubkeys = lazyPreviousSubkeys(options.previousSecrets, "idempotency");
+  let previousHashers: readonly KeyHasher[] | undefined;
+
+  /** How `key` and its fingerprint are stored under the current secret and the previous ones. */
+  function identify(
+    kind: "http" | "run",
+    scope: string,
+    key: string,
+    parts: FingerprintParts,
+  ): Identity {
+    previousHashers ??= previousSubkeys().map((previousKey) => createKeyHasher(() => previousKey));
+    const under = (keys: KeyHasher): Stored => ({
+      key: keys.storageKey(kind, scope, key),
+      fingerprint: keys.fingerprint(parts),
+    });
+    return { current: under(hasher), previous: previousHashers.map(under) };
+  }
 
   /**
-   * Claims `key` in one statement: inserts it, or takes over a row that has expired or whose
+   * Claims a key in one statement: inserts it, or takes over a row that has expired or whose
    * request crashed (its lease ran out) with the same fingerprint. Otherwise returns the row as it
    * is. A row inserted by a transaction that committed after this statement's snapshot is
    * invisible to the fallback select, so that case is retried with a fresh snapshot.
+   *
+   * With previous secrets, a row stored under one of them that hasn't expired is treated like
+   * the current key's row: answered as it is, or, if its request crashed and this is the same
+   * request, deleted in the same statement that claims the current key. The crashed request can
+   * then no longer complete it, just as a takeover of the current key's row stops it. Nothing is
+   * ever inserted under a previous secret, so the check can't race with an insert.
    */
-  async function begin(
-    key: string,
-    scope: string,
-    fingerprint: string,
-    ttlMs: number,
-  ): Promise<Claim> {
+  async function begin(identity: Identity, scope: string, ttlMs: number): Promise<Claim> {
+    const { key, fingerprint } = identity.current;
+    const earlierKeys =
+      identity.previous.length === 0
+        ? null
+        : sql.join(
+            identity.previous.map((stored) => sql`${stored.key}`),
+            sql`, `,
+          );
+    const earlierRequests = sql.join(
+      identity.previous.map((stored) => sql`(${stored.key}, ${stored.fingerprint})`),
+      sql`, `,
+    );
     const token = randomHex(16);
     for (let attempt = 0; attempt < 3; attempt++) {
       const rows = rowsOf<{
-        state: "claimed" | "existing";
+        state: "claimed" | "existing" | "earlier";
+        key: string | null;
         fingerprint: string | null;
         response: string | null;
         completed: boolean | null;
       }>(
         await db.execute(sql`
           with input as (select ${now()} as now),
+          ${
+            earlierKeys === null
+              ? sql``
+              : sql`earlier as (
+            select e.key, e.fingerprint, e.response, e.completed_at is not null as completed
+            from ${table} as e, input
+            where e.key in (${earlierKeys}) and e.expires_at > input.now
+            order by e.created_at desc
+            limit 1
+          ),
+          freed as (
+            delete from ${table} as f
+            using earlier, input
+            where f.key = earlier.key and (f.key, f.fingerprint) in (${earlierRequests})
+              and f.completed_at is null and f.locked_until <= input.now
+            returning 1
+          ),`
+          }
           claimed as (
             insert into ${table} as i
               (key, scope, fingerprint, locked_by, locked_until, response, created_at, completed_at, expires_at)
             select ${key}, ${scope}, ${fingerprint}, ${token}, input.now + ${interval(leaseMs)},
               null, input.now, null, input.now + ${interval(ttlMs)}
             from input
+            ${
+              earlierKeys === null
+                ? sql``
+                : sql`where not exists (select 1 from earlier) or exists (select 1 from freed)`
+            }
             on conflict (key) do update set
               scope = excluded.scope, fingerprint = excluded.fingerprint,
               locked_by = excluded.locked_by, locked_until = excluded.locked_until,
@@ -153,18 +232,34 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
                 and i.fingerprint = excluded.fingerprint)
             returning 1
           )
-          select 'claimed' as state, null::text as fingerprint, null::text as response,
-            null::boolean as completed
+          select 'claimed' as state, null::text as key, null::text as fingerprint,
+            null::text as response, null::boolean as completed
           from claimed
           union all
-          select 'existing', e.fingerprint, e.response, e.completed_at is not null
+          ${
+            earlierKeys === null
+              ? sql``
+              : sql`select 'earlier', earlier.key, earlier.fingerprint, earlier.response, earlier.completed
+          from earlier
+          where not exists (select 1 from claimed)
+          union all`
+          }
+          select 'existing', null, e.fingerprint, e.response, e.completed_at is not null
           from ${table} as e
-          where e.key = ${key} and not exists (select 1 from claimed)`),
+          where e.key = ${key} and not exists (select 1 from claimed)
+            ${earlierKeys === null ? sql`` : sql`and not exists (select 1 from earlier)`}`),
       );
       const row = rows[0];
       if (row === undefined) continue;
       if (row.state === "claimed") return { kind: "claimed", token };
-      if (!timingSafeEqual(row.fingerprint ?? "", fingerprint)) return { kind: "mismatch" };
+      // A row stored under a previous secret has that secret's fingerprint.
+      const expected =
+        row.state === "earlier"
+          ? identity.previous.find((stored) => stored.key === row.key)?.fingerprint
+          : fingerprint;
+      if (expected === undefined || !timingSafeEqual(row.fingerprint ?? "", expected)) {
+        return { kind: "mismatch" };
+      }
       if (row.completed === true && row.response !== null) {
         return { kind: "completed", response: row.response };
       }
@@ -232,11 +327,12 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
     }
   }
 
+  /** What a request's fingerprint is made of; `identify` hashes it under each secret. */
   async function requestFingerprint(
     request: Request,
     custom: string | Uint8Array | undefined,
-  ): Promise<string> {
-    if (custom !== undefined) return fingerprintOf(["custom", custom]);
+  ): Promise<FingerprintParts> {
+    if (custom !== undefined) return ["custom", custom];
     if (request.bodyUsed) {
       throw new GroundworkError(
         "invalid_argument",
@@ -248,12 +344,7 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
       request.body === null
         ? new Uint8Array(0)
         : new Uint8Array(await request.clone().arrayBuffer());
-    return fingerprintOf([
-      "request",
-      request.method.toUpperCase(),
-      url.pathname + url.search,
-      body,
-    ]);
+    return ["request", request.method.toUpperCase(), url.pathname + url.search, body];
   }
 
   return {
@@ -272,8 +363,14 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
       const clientKey = parseIdempotencyKey(header);
       if (clientKey === null) return errorResponse("idempotency_key_invalid");
 
-      const key = storageKey("http", scope, clientKey);
-      const claim = await begin(key, scope, await requestFingerprint(request, custom), ttlMs);
+      const identity = identify(
+        "http",
+        scope,
+        clientKey,
+        await requestFingerprint(request, custom),
+      );
+      const key = identity.current.key;
+      const claim = await begin(identity, scope, ttlMs);
       if (claim.kind === "mismatch") return errorResponse("idempotency_key_reused");
       if (claim.kind === "in_progress") return errorResponse("idempotency_key_in_use");
       if (claim.kind === "completed") {
@@ -330,10 +427,15 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
       }
       const custom = checkFingerprint(input.fingerprint);
       const ttlMs = ttlOf(input.ttl);
-      const fingerprint = fingerprintOf(custom === undefined ? ["none"] : ["custom", custom]);
-      const key = storageKey("run", scope, input.key);
+      const identity = identify(
+        "run",
+        scope,
+        input.key,
+        custom === undefined ? ["none"] : ["custom", custom],
+      );
+      const key = identity.current.key;
 
-      const claim = await begin(key, scope, fingerprint, ttlMs);
+      const claim = await begin(identity, scope, ttlMs);
       if (claim.kind === "mismatch" || claim.kind === "in_progress") {
         return { ok: false, reason: claim.kind } satisfies RunResult<Value>;
       }

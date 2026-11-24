@@ -159,6 +159,14 @@ this while the request runs, so this is how soon a crashed request frees its key
 
 Defaults to `console` (warnings and errors only).
 
+##### previousSecrets?
+
+> `readonly` `optional` **previousSecrets?**: [`PreviousSecretsSource`](../groundwork.md#previoussecretssource)
+
+Secrets used before `secret`. A key stored under one of them is still recognised until it
+expires, so a retry that straddles a change of secret is replayed, not run again. See
+"Rotating the secret" in the core-concepts docs.
+
 ##### secret
 
 > `readonly` **secret**: [`SecretSource`](../groundwork.md#secretsource)

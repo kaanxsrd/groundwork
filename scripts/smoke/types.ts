@@ -8,6 +8,7 @@ import {
   type GroundworkErrorCode,
   isGroundworkError,
   type Logger,
+  type PreviousSecretsSource,
 } from "@vantedev/groundwork";
 import { createApiKeys, type VerifyResult } from "@vantedev/groundwork/api-keys";
 import { type AuditEntry, createAuditLog, diff } from "@vantedev/groundwork/audit";
@@ -70,6 +71,11 @@ limiter.rule({ name: "x", limit: 5, window: 900 });
 const result: Promise<RateLimitResult> = rule.check("203.0.113.9", { cost: 2 });
 
 const gw = createGroundwork({ db: pgDb, tables: { rateLimits }, secret, logger });
+const previous: PreviousSecretsSource = () => [secret];
+createGroundwork({ db: pgDb, tables: {}, secret, previousSecrets: [secret, new Uint8Array(32)] });
+createGroundwork({ db: pgDb, tables: {}, secret, previousSecrets: previous });
+// @ts-expect-error previousSecrets is a list, even for one secret
+createGroundwork({ db: pgDb, tables: {}, secret, previousSecrets: secret });
 const retry: number = (await gw.rateLimit.rule({ name: "y", limit: 1, window: "1m" }).check("x"))
   .retryAfterMs;
 

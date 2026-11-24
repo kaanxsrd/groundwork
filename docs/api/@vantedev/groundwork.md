@@ -571,6 +571,15 @@ Identifies this worker in `locked_by`.
 
 Defaults to `console` (warnings and errors only).
 
+##### previousSecrets?
+
+> `readonly` `optional` **previousSecrets?**: [`PreviousSecretsSource`](#previoussecretssource)
+
+Secrets used before `secret`, newest first, or a function that returns them on first use.
+API keys stored under one of them still verify, and move to `secret` when they're next used;
+idempotency keys stored under one are still replayed until they expire. Rate limits start
+over. See "Rotating the secret" in the core-concepts docs.
+
 ##### rateLimit?
 
 > `readonly` `optional` **rateLimit?**: `object`
@@ -760,6 +769,16 @@ Machine-readable reason for a [GroundworkError](#groundworkerror).
 > **LogContext** = `Readonly`\<`Record`\<`string`, `unknown`\>\>
 
 Structured context attached to a log line. groundwork never puts secrets, raw keys or raw subjects in it.
+
+***
+
+### PreviousSecretsSource
+
+> **PreviousSecretsSource** = readonly [`Secret`](#secret-1)[] \| (() => readonly [`Secret`](#secret-1)[])
+
+Secrets used before the current one, newest first, or a function that returns them on first
+use. API keys and idempotency keys stored under one of them are still recognised, so the secret
+can change without invalidating them. Each must be at least 32 bytes, like the secret.
 
 ***
 

@@ -183,7 +183,7 @@ It deletes in batches and skips rows other checks are using. When the jobs modul
 
 - The subject is HMAC-SHA256'd with a key derived from your secret. The raw value is never stored, logged or put in an error.
 - The rule name is stored as is, so operators can see which rules are busy.
-- Changing the secret changes every key, which resets every limit. See [the app secret](core-concepts.md#the-app-secret).
+- Changing the secret changes every key, which resets every limit, even with `previousSecrets`. See [rotating the secret](core-concepts.md#rotating-the-secret).
 
 ## Replacing a hand-rolled limiter
 

@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import {
+  checkPreviousSecrets,
   deriveSubkey,
   deriveSubkeys,
   hmacSha256,
   hmacSha256Parts,
   KEY_PURPOSES,
+  lazyPreviousSubkeys,
   MIN_SECRET_BYTES,
   randomBase64Url,
   randomHex,
@@ -99,6 +101,44 @@ describe("deriveSubkey", () => {
       /string or a Uint8Array/,
     );
     expect(() => deriveSubkey(undefined as unknown as string, "api-keys")).toThrow();
+  });
+});
+
+describe("previous secrets", () => {
+  const OLDER = "an-older-groundwork-secret-0123456789abcdef";
+
+  test("derive the same subkeys as those secrets did, newest first", () => {
+    const keys = lazyPreviousSubkeys([SECRET, OLDER], "api-keys")();
+    expect(keys).toEqual([deriveSubkey(SECRET, "api-keys"), deriveSubkey(OLDER, "api-keys")]);
+    expect(lazyPreviousSubkeys(undefined, "api-keys")()).toEqual([]);
+    expect(lazyPreviousSubkeys([], "idempotency")()).toEqual([]);
+  });
+
+  test("a list is checked now, and an error names the entry but never shows it", () => {
+    const fail = (value: unknown) => () => checkPreviousSecrets(value as never);
+    expect(fail(SECRET)).toThrow(/previousSecrets must be a list/);
+    expect(fail(null)).toThrow(/previousSecrets must be a list/);
+    expect(fail([SECRET, "too-short"])).toThrow(/previousSecrets\[1\] must be at least 32 bytes/);
+    expect(fail([undefined])).toThrow(/previousSecrets\[0\] must be a string or a Uint8Array/);
+    expect(fail([SECRET, "too-short"])).not.toThrow(/too-short/);
+    expect(() => lazyPreviousSubkeys([OLDER, "x"], "api-keys")).toThrow(/previousSecrets\[1\]/);
+    expect(() => checkPreviousSecrets(undefined)).not.toThrow();
+  });
+
+  test("a function is called on first use, once, and its result checked then", () => {
+    let calls = 0;
+    const keys = lazyPreviousSubkeys(() => {
+      calls++;
+      return [OLDER];
+    }, "idempotency");
+    expect(calls).toBe(0);
+    expect(keys()).toEqual([deriveSubkey(OLDER, "idempotency")]);
+    expect(keys()).toBe(keys());
+    expect(calls).toBe(1);
+
+    const bad = lazyPreviousSubkeys(() => "not-a-list" as never, "api-keys");
+    expect(() => checkPreviousSecrets(() => [])).not.toThrow();
+    expect(bad).toThrow(/previousSecrets must be a list/);
   });
 });
 

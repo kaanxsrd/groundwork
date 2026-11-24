@@ -34,7 +34,12 @@ import type { AuditLog } from "./audit/types.ts";
 import { createIdempotency } from "./idempotency/idempotency.ts";
 import type { Idempotency } from "./idempotency/types.ts";
 import type { Clock } from "./internal/clock.ts";
-import { checkSecretSource, type SecretSource } from "./internal/crypto.ts";
+import {
+  checkPreviousSecrets,
+  checkSecretSource,
+  type PreviousSecretsSource,
+  type SecretSource,
+} from "./internal/crypto.ts";
 import type { GroundworkDatabase } from "./internal/db.ts";
 import type { Duration } from "./internal/duration.ts";
 import { GroundworkError } from "./internal/errors.ts";
@@ -50,7 +55,7 @@ import type { JobSchedulesTable, JobsTable } from "./schema/jobs.ts";
 import type { RateLimitsTable } from "./schema/rate-limits.ts";
 
 export type { Clock } from "./internal/clock.ts";
-export type { Secret, SecretSource } from "./internal/crypto.ts";
+export type { PreviousSecretsSource, Secret, SecretSource } from "./internal/crypto.ts";
 export type { GroundworkDatabase } from "./internal/db.ts";
 export type { Duration, DurationUnit } from "./internal/duration.ts";
 export { GroundworkError, type GroundworkErrorCode, isGroundworkError } from "./internal/errors.ts";
@@ -92,6 +97,13 @@ export interface GroundworkOptions<
    * during `next build`, or in a worker that only runs jobs: `secret: () => env.GROUNDWORK_SECRET`.
    */
   readonly secret: SecretSource;
+  /**
+   * Secrets used before `secret`, newest first, or a function that returns them on first use.
+   * API keys stored under one of them still verify, and move to `secret` when they're next used;
+   * idempotency keys stored under one are still replayed until they expire. Rate limits start
+   * over. See "Rotating the secret" in the core-concepts docs.
+   */
+  readonly previousSecrets?: PreviousSecretsSource | undefined;
   /** Defaults to `console` (warnings and errors only). */
   readonly logger?: Logger | undefined;
   /** Defaults to each store's own clock. Inject one in tests. */
@@ -192,7 +204,7 @@ export function createGroundwork<
   if (typeof options !== "object" || options === null) {
     throw new GroundworkError("invalid_config", "createGroundwork needs an options object.");
   }
-  const { db, tables, secret, logger, clock } = options;
+  const { db, tables, secret, previousSecrets, logger, clock } = options;
   if (!db || typeof db.execute !== "function") {
     throw new GroundworkError("invalid_config", "db must be a Drizzle Postgres database.");
   }
@@ -204,12 +216,15 @@ export function createGroundwork<
   }
   // A plain secret fails at startup, not on the first request; a function fails on first use.
   checkSecretSource(secret);
+  checkPreviousSecrets(previousSecrets);
 
   const shared = {
     secret,
     ...(logger === undefined ? {} : { logger }),
     ...(clock === undefined ? {} : { clock }),
   };
+  // Only the modules whose stored hashes are worth keeping across a change of secret take these.
+  const previous = previousSecrets === undefined ? {} : { previousSecrets };
   const missingTable = (module: string, table: string) =>
     new GroundworkError(
       "invalid_config",
@@ -286,6 +301,7 @@ export function createGroundwork<
       options.audit !== undefined && tables.auditLog !== undefined ? getAudit() : undefined;
     apiKeys = createApiKeys<TScopes>({
       ...shared,
+      ...previous,
       db,
       table: tables.apiKeys,
       namespace: config.namespace,
@@ -344,6 +360,7 @@ export function createGroundwork<
     const config = options.idempotency ?? {};
     idempotency = createIdempotency({
       ...shared,
+      ...previous,
       db,
       table: tables.idempotencyKeys,
       ttl: config.ttl,

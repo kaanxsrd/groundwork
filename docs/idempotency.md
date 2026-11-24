@@ -131,13 +131,14 @@ return Response.json(
 ```ts
 createGroundwork({ …, idempotency: { ttl: "24h", lease: "30s" } });
 // or on its own:
-createIdempotency({ db, table: idempotencyKeys, secret, ttl, lease, clock, logger });
+createIdempotency({ db, table: idempotencyKeys, secret, previousSecrets, ttl, lease, clock, logger });
 ```
 
 | Option | Default | |
 | --- | --- | --- |
 | `ttl` | `"24h"` | How long a completed result is replayed. |
 | `lease` | `"30s"` | How soon a crashed request frees its key. Renewed while the request runs. |
+| `previousSecrets` | none | Secrets used before `secret`. Keys stored under one are still answered until they expire, so a retry across a change of secret doesn't run twice. With `createGroundwork`, set it next to `secret`. See [rotating the secret](core-concepts.md#rotating-the-secret). |
 
 `handle(request, options, handler)` takes `scope`, `required` (default `false`), `ttl` and `fingerprint`.
 

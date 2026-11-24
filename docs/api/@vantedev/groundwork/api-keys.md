@@ -591,6 +591,13 @@ Called after every change to a key, in its transaction. `createGroundwork` uses 
 
 `void` \| `Promise`\<`void`\>
 
+##### previousSecrets?
+
+> `readonly` `optional` **previousSecrets?**: [`PreviousSecretsSource`](../groundwork.md#previoussecretssource)
+
+Secrets used before `secret`. Keys stored under one of them still verify, and are moved to
+`secret` the first time they're used. See "Rotating the secret" in the core-concepts docs.
+
 ##### rateLimiter?
 
 > `readonly` `optional` **rateLimiter?**: [`RateLimiter`](rate-limit.md#ratelimiter)

@@ -16,6 +16,13 @@ export type Secret = string | Uint8Array;
  */
 export type SecretSource = Secret | (() => Secret);
 
+/**
+ * Secrets used before the current one, newest first, or a function that returns them on first
+ * use. API keys and idempotency keys stored under one of them are still recognised, so the secret
+ * can change without invalidating them. Each must be at least 32 bytes, like the secret.
+ */
+export type PreviousSecretsSource = readonly Secret[] | (() => readonly Secret[]);
+
 /** What a derived subkey is used for. Each module gets its own key, so one can never stand in for another. */
 export type KeyPurpose = "rate-limit" | "api-keys" | "idempotency";
 
@@ -34,26 +41,68 @@ const hkdfInfo = (purpose: KeyPurpose): string => `groundwork/v1/${purpose}`;
 
 export type Subkeys = Readonly<Record<KeyPurpose, Buffer>>;
 
-function secretBytes(secret: Secret): Buffer {
+function secretBytes(secret: Secret, label = "secret"): Buffer {
   if (typeof secret !== "string" && !(secret instanceof Uint8Array)) {
-    throw new GroundworkError("invalid_config", "secret must be a string or a Uint8Array.");
+    throw new GroundworkError("invalid_config", `${label} must be a string or a Uint8Array.`);
   }
   const bytes = typeof secret === "string" ? Buffer.from(secret, "utf8") : Buffer.from(secret);
   if (bytes.length < MIN_SECRET_BYTES) {
     // Never echo the secret, not even its length: only the requirement.
     throw new GroundworkError(
       "invalid_config",
-      `secret must be at least ${MIN_SECRET_BYTES} bytes. Generate one with: openssl rand -base64 32`,
+      `${label} must be at least ${MIN_SECRET_BYTES} bytes. Generate one with: openssl rand -base64 32`,
     );
   }
   return bytes;
 }
 
 /** Derives the subkey for one purpose with HKDF-SHA256 (RFC 5869). */
-export function deriveSubkey(secret: Secret, purpose: KeyPurpose): Buffer {
+export function deriveSubkey(secret: Secret, purpose: KeyPurpose, label = "secret"): Buffer {
   return Buffer.from(
-    hkdfSync("sha256", secretBytes(secret), HKDF_SALT, hkdfInfo(purpose), SUBKEY_BYTES),
+    hkdfSync("sha256", secretBytes(secret, label), HKDF_SALT, hkdfInfo(purpose), SUBKEY_BYTES),
   );
+}
+
+function previousSecretList(value: unknown): readonly Secret[] {
+  if (!Array.isArray(value)) {
+    throw new GroundworkError(
+      "invalid_config",
+      "previousSecrets must be a list of secrets, such as [process.env.OLD_GROUNDWORK_SECRET].",
+    );
+  }
+  return value as readonly Secret[];
+}
+
+/**
+ * The subkeys of the previous secrets for one purpose, derived once. A list is checked and
+ * derived now; a function is called, checked and derived on the first call, as `lazySubkey` does.
+ */
+export function lazyPreviousSubkeys(
+  source: PreviousSecretsSource | undefined,
+  purpose: KeyPurpose,
+): () => readonly Buffer[] {
+  const derive = (secrets: unknown): readonly Buffer[] =>
+    previousSecretList(secrets).map((secret, index) =>
+      deriveSubkey(secret, purpose, `previousSecrets[${index}]`),
+    );
+  if (source === undefined) return () => [];
+  if (typeof source !== "function") {
+    const keys = derive(source);
+    return () => keys;
+  }
+  let keys: readonly Buffer[] | undefined;
+  return () => {
+    keys ??= derive(source());
+    return keys;
+  };
+}
+
+/** Throws now for a list with a bad entry; a function is checked on first use. */
+export function checkPreviousSecrets(source: PreviousSecretsSource | undefined): void {
+  if (source === undefined || typeof source === "function") return;
+  previousSecretList(source).forEach((secret, index) => {
+    secretBytes(secret, `previousSecrets[${index}]`);
+  });
 }
 
 /**

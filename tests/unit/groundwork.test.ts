@@ -81,6 +81,34 @@ describe("a secret function", () => {
   });
 });
 
+describe("previousSecrets", () => {
+  test("a list is checked at startup, a function on first use", () => {
+    expect(() =>
+      createGroundwork({ db, tables: {}, secret: TEST_SECRET, previousSecrets: ["short"] }),
+    ).toThrow(/previousSecrets\[0\] must be at least 32 bytes/);
+    expect(() =>
+      createGroundwork({
+        db,
+        tables: {},
+        secret: TEST_SECRET,
+        previousSecrets: TEST_SECRET as never,
+      }),
+    ).toThrow(/previousSecrets must be a list/);
+
+    let calls = 0;
+    createGroundwork({
+      db,
+      tables: groundworkTables(),
+      secret: TEST_SECRET,
+      previousSecrets: () => {
+        calls++;
+        return [];
+      },
+    });
+    expect(calls).toBe(0);
+  });
+});
+
 describe("gw.jobs", () => {
   test("a config error while adding the cleanup schedules isn't cached away", () => {
     const tables = groundworkTables();

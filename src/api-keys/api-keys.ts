@@ -3,7 +3,13 @@ import { toJsonObject } from "../audit/json.ts";
 import type { AuditActor } from "../audit/types.ts";
 import { ipInBlocks } from "../internal/cidr.ts";
 import type { Clock } from "../internal/clock.ts";
-import { lazySubkey, type SecretSource, timingSafeEqual } from "../internal/crypto.ts";
+import {
+  lazyPreviousSubkeys,
+  lazySubkey,
+  type PreviousSecretsSource,
+  type SecretSource,
+  timingSafeEqual,
+} from "../internal/crypto.ts";
 import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
@@ -52,6 +58,11 @@ export interface ApiKeysOptions<TScopes extends Record<string, string>> {
    * subkey derived from it.
    */
   readonly secret: SecretSource;
+  /**
+   * Secrets used before `secret`. Keys stored under one of them still verify, and are moved to
+   * `secret` the first time they're used. See "Rotating the secret" in the core-concepts docs.
+   */
+  readonly previousSecrets?: PreviousSecretsSource | undefined;
   /** The start of every key, such as `"vnt"` for `vnt_…`. Pick something unique to your app. */
   readonly namespace: string;
   /** Every scope your API knows, with a description: `{ "posts:read": "Read posts" }`. */
@@ -184,6 +195,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
   const scopeRules = createScopeRules(options.scopes);
   const checksum = options.checksum ?? true;
   const subkey = lazySubkey(options.secret, "api-keys");
+  const previousSubkeys = lazyPreviousSubkeys(options.previousSecrets, "api-keys");
   const logger = createOnceLogger(options.logger ?? consoleLogger);
   const waitUntil =
     options.waitUntil ??
@@ -444,30 +456,29 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
     row: StoredRecord,
     at: number,
     ip: string | null,
-    legacy: { from: string; to: string } | null,
+    rehash: { from: string; to: string } | null,
   ) {
     const recent = recentTouches.get(row.id);
     const stale =
       (row.last_used_at === null || at - row.last_used_at >= TOUCH_EVERY_MS) &&
       (recent === undefined || at - recent >= TOUCH_EVERY_MS);
-    if (!stale && !legacy) return;
-    if (stale) {
-      if (recentTouches.size >= 10_000) recentTouches.clear();
-      recentTouches.set(row.id, at);
-    }
+    if (!stale && !rehash) return;
+    if (recentTouches.size >= 10_000) recentTouches.clear();
+    recentTouches.set(row.id, at);
     const work = (async () => {
-      if (legacy) {
-        // Move a legacy key to groundwork's hash, once.
-        await db.execute(
-          sql`update ${table} as k set key_hash = ${legacy.to}::text where k.id = ${row.id}::uuid and k.key_hash = ${legacy.from}::text`,
-        );
-      }
-      if (stale) {
+      if (rehash) {
+        // Move a key stored under a previous secret or a legacy hash to the current hash, once,
+        // and record this use with it, whatever the once-a-minute limit says. So every key used
+        // since the secret changed has a lastUsedAt after the change (docs/core-concepts.md).
         await db.execute(sql`
-          update ${table} as k set last_used_at = ${now()}, last_used_ip = ${ip}::text
-          where k.id = ${row.id}::uuid
-            and (k.last_used_at is null or k.last_used_at <= ${now()} - interval '1 minute')`);
+          update ${table} as k set key_hash = ${rehash.to}::text, last_used_at = ${now()}, last_used_ip = ${ip}::text
+          where k.id = ${row.id}::uuid and k.key_hash = ${rehash.from}::text`);
+        return;
       }
+      await db.execute(sql`
+        update ${table} as k set last_used_at = ${now()}, last_used_ip = ${ip}::text
+        where k.id = ${row.id}::uuid
+          and (k.last_used_at is null or k.last_used_at <= ${now()} - interval '1 minute')`);
     })().catch((error: unknown) => {
       logger.once(
         "warn",
@@ -802,6 +813,17 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       if (legacy !== null && typeof legacy !== "string") {
         throw new GroundworkError("invalid_config", "legacyHash must return a string.");
       }
+      // What the key may be stored as: the current hash, its hash under each previous secret
+      // (until it's used once after the change), and the legacy hash.
+      const candidates = [
+        hash,
+        ...previousSubkeys().map((previousKey) => hashKey(previousKey, parsed.body)),
+        ...(legacy === null ? [] : [legacy]),
+      ];
+      const candidateList = sql.join(
+        candidates.map((candidate) => sql`${candidate}::text`),
+        sql`, `,
+      );
       // One round trip: the current key, or the previous one within its grace period.
       const rows = rowsOf<{
         record: string;
@@ -813,18 +835,18 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
           with input as materialized (select ${now()} as now)
           select ${RECORD} as record, k.key_hash, k.previous_key_hash, ${sql.raw(ms("input.now"))} as now
           from ${table} as k, input
-          where k.key_hash in (${hash}::text, ${legacy}::text)
-             or (k.previous_key_hash in (${hash}::text, ${legacy}::text) and k.previous_key_expires_at > input.now)
+          where k.key_hash in (${candidateList})
+             or (k.previous_key_hash in (${candidateList}) and k.previous_key_expires_at > input.now)
           limit 1`),
       );
       const row = rows[0];
       if (!row) return denied("invalid");
       const at = toNumber(row.now);
       const stored = JSON.parse(row.record) as StoredRecord;
-      const matches = (candidate: string | null) =>
-        candidate !== null &&
-        (timingSafeEqual(candidate, hash) ||
-          (legacy !== null && timingSafeEqual(candidate, legacy)));
+      // Every candidate is compared, so the time taken doesn't depend on which one matched.
+      const matches = (value: string | null) =>
+        value !== null &&
+        candidates.reduce((found, candidate) => timingSafeEqual(value, candidate) || found, false);
       const current = matches(row.key_hash);
       const previous =
         !current &&
@@ -875,8 +897,9 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
         }
       }
 
-      const legacyMatch = current && legacy !== null && timingSafeEqual(row.key_hash, legacy);
-      touch(stored, at, ip, legacyMatch ? { from: legacy, to: hash } : null);
+      // Stored under a previous secret or the legacy hash: move it to the current hash.
+      const outdated = current && !timingSafeEqual(row.key_hash, hash);
+      touch(stored, at, ip, outdated ? { from: row.key_hash, to: hash } : null);
       return { ok: true, key, headers: rateLimit?.headers ?? {}, rateLimit, quota };
     },
 

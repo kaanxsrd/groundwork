@@ -130,7 +130,7 @@ The counters' rows are named `<namespace>:key` and `<namespace>:key.daily`, and 
 
 ## Last use
 
-`lastUsedAt` and `lastUsedIp` are updated at most once a minute per key, outside the request's critical path, and only after a successful check. On serverless platforms, pass the platform's way to keep background work alive as `waitUntil` (for example Next.js `after`, or `ctx.waitUntil`). Otherwise the write may be cut off when the response is sent.
+`lastUsedAt` and `lastUsedIp` are updated at most once a minute per key, outside the request's critical path, and only after a successful check. The one exception is the use that moves a key off a [previous secret](core-concepts.md#rotating-the-secret) or a legacy hash, which is always recorded. On serverless platforms, pass the platform's way to keep background work alive as `waitUntil` (for example Next.js `after`, or `ctx.waitUntil`). Otherwise the write may be cut off when the response is sent.
 
 ## Audit log
 
@@ -146,7 +146,7 @@ createApiKeys({ …, onEvent: (event) => audit.record(apiKeyAuditEvent(event), {
 
 ## Security notes
 
-- Keys are stored as HMAC-SHA256 under a subkey derived from your app secret (see [the app secret](core-concepts.md#the-app-secret)). A database leak alone doesn't reveal or verify keys. **Changing the secret invalidates every key.**
+- Keys are stored as HMAC-SHA256 under a subkey derived from your app secret (see [the app secret](core-concepts.md#the-app-secret)). A database leak alone doesn't reveal or verify keys. **Changing the secret invalidates every key**, unless the old secret goes in `previousSecrets`: keys stored under it keep working and move to the new secret on their next use. See [rotating the secret](core-concepts.md#rotating-the-secret).
 - The hash comparison is timing-safe. Lookup is by hash through a unique index.
 - Keys never appear in logs, errors, audit entries or records.
 - A malformed or mistyped key is rejected before any database work.

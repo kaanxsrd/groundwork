@@ -47,7 +47,56 @@ const gw = createGroundwork({ db, tables, secret: () => env().GROUNDWORK_SECRET 
 That lets you create `gw` at module scope when the environment isn't set during `next build`, and run a worker that only cleans up or runs jobs without the secret at all. A plain secret that's too short fails at startup; a function that returns one fails on first use.
 
 > [!IMPORTANT]
-> Stored API key hashes are derived from this secret. **Changing the secret invalidates every API key** and resets every rate limit. Keep it stable, keep it out of source control, and back it up with your database credentials. Support for rotating to a new secret (`previousSecrets`) is planned.
+> Stored API key hashes are derived from this secret. Keep it out of source control, and back it up with your database credentials. **Changing it without `previousSecrets` invalidates every API key**: see [rotating the secret](#rotating-the-secret).
+
+### Rotating the secret
+
+To change the secret, perhaps because someone who knew it has left or it may have been exposed, move the old one to `previousSecrets`:
+
+```ts
+const gw = createGroundwork({
+  db,
+  tables,
+  secret: process.env.GROUNDWORK_SECRET!,
+  previousSecrets: process.env.GROUNDWORK_PREVIOUS_SECRET
+    ? [process.env.GROUNDWORK_PREVIOUS_SECRET]
+    : [],
+});
+```
+
+`previousSecrets` takes a list, newest first, or a function that returns one on first use, as `secret` does. Each module then handles the change like this:
+
+| | After the change |
+| --- | --- |
+| API keys | Keys stored under a previous secret still verify, and move to the new secret the first time they're used. New keys use the new secret. |
+| Idempotency keys | Keys stored under a previous secret are still answered (replayed, or a 409 or 422) until they expire, so a retry that straddles the change doesn't run twice. New keys use the new secret. |
+| Rate limits | Start over. Counts aren't worth carrying across. |
+| Audit log, jobs | Don't use the secret. |
+
+**With one instance**, set the new secret and the old one together and deploy. **With several instances**, or any rolling deploy, use two deploys, so no instance ever stores something another can't read:
+
+1. Keep `secret` as it is and add the new secret to `previousSecrets`. Every instance now accepts both.
+2. Swap them: the new secret becomes `secret`, and the old one moves to `previousSecrets`.
+
+While the second deploy rolls out, rate-limit counts are split between the two secrets, so a subject can briefly get up to twice its limit.
+
+**Drop the old secret** once nothing is stored under it:
+
+- Idempotency keys: once your longest `ttl` (24 hours by default) has passed since step 2 finished.
+- API keys: a key moves to the new secret only when it's used, and that use is always recorded in `last_used_at`. So these keys still need the old secret:
+
+  ```sql
+  select id, name, owner_id, last_used_at from gw_api_keys
+  where revoked_at is null and (expires_at is null or expires_at > now())
+    and created_at < :step_2_finished
+    and (last_used_at is null or last_used_at < :step_2_finished);
+  ```
+
+  They stop working when the old secret goes. Wait for them to be used or to expire, or `rotate()` them and give their owners the new keys.
+
+A previous secret still verifies keys, so keep it as secret as the current one until it's dropped.
+
+What a leaked secret exposes: with a copy of the database as well, someone could check guesses of rate-limit subjects (an IP address, an email address) and request bodies against the stored hashes. It can't produce an API key, because keys are random and the secret only maps a key to its stored hash.
 
 ## Errors
 
