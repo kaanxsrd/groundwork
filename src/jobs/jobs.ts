@@ -399,11 +399,12 @@ export function createJobs(options: JobsOptions): Jobs {
     payload: unknown,
     enqueueOptions: EnqueueOptions = {},
   ): Promise<EnqueueResult> {
-    const { json, priority, maxAttempts, dedupeKey, ...when } = await prepare(
-      handler,
-      payload,
-      enqueueOptions,
-    );
+    const replace = enqueueOptions.replace ?? false;
+    if (typeof replace !== "boolean") {
+      throw new GroundworkError("invalid_argument", "replace must be true or false.");
+    }
+    const prepared = await prepare(handler, payload, enqueueOptions);
+    const { json, priority, maxAttempts, dedupeKey, ...when } = prepared;
     const runAt: SQL =
       when.runAt !== null
         ? sql`${when.runAt.toISOString()}::timestamptz`
@@ -412,6 +413,15 @@ export function createJobs(options: JobsOptions): Jobs {
           : sql`input.now`;
 
     const target = enqueueOptions.tx ?? db;
+    if (replace) {
+      if (dedupeKey === null) {
+        throw new GroundworkError(
+          "invalid_argument",
+          "replace needs a dedupeKey: it replaces the pending job with that key.",
+        );
+      }
+      return enqueueReplacing(handler, prepared, dedupeKey, runAt, target);
+    }
     const rows = rowsOf<{ id: string; created: boolean }>(
       await target.execute(sql`
         with input as materialized (select ${now()} as now),
@@ -441,6 +451,65 @@ export function createJobs(options: JobsOptions): Jobs {
     if (!existing)
       throw new Error("enqueue found neither a new job nor the duplicate it collided with");
     return { id: existing.id, created: false };
+  }
+
+  /**
+   * `enqueue` with `replace`, to debounce, as graphile-worker's "replace" mode does:
+   *
+   * - A pending job with the key gets this call's payload, timing, priority and maxAttempts. It
+   *   keeps its id and its attempt count, which only ever grows because it fences workers.
+   * - So does a running job whose lease ran out (its worker is gone): it goes back to pending,
+   *   so the old worker can no longer finish it.
+   * - A running job that's alive keeps running, but gives up the key, and a new job is enqueued.
+   *   Its payload may be out of date, and dropping this call would lose the latest one.
+   *
+   * The first statement replaces or inserts. If it does neither, a live running job holds the
+   * key: the second statement takes the key from it, and the first runs again.
+   */
+  async function enqueueReplacing(
+    handler: Handler,
+    job: Prepared,
+    dedupeKey: string,
+    runAt: SQL,
+    target: GroundworkDatabase,
+  ): Promise<EnqueueResult> {
+    const payload = jsonbParam(JSON.stringify(job.json));
+    const mine = sql`j.type = ${handler.type}::text and j.dedupe_key = ${dedupeKey}::text`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const [row] = rowsOf<{ id: string; created: boolean }>(
+        await target.execute(sql`
+          with input as materialized (select ${now()} as now),
+          replaced as (
+            update ${table} as j set payload = ${payload}, run_at = ${runAt},
+              priority = ${job.priority}::int, max_attempts = ${job.maxAttempts}::int,
+              status = 'pending', locked_by = null, locked_until = null, updated_at = input.now
+            from input
+            where ${mine}
+              and (j.status = 'pending' or (j.status = 'running' and j.locked_until <= input.now))
+            returning j.id::text as id
+          ),
+          inserted as (
+            insert into ${table} as j (type, payload, priority, max_attempts, run_at, dedupe_key, created_at, updated_at)
+            select ${handler.type}::text, ${payload}, ${job.priority}::int, ${job.maxAttempts}::int,
+              ${runAt}, ${dedupeKey}::text, input.now, input.now
+            from input
+            where not exists (select 1 from replaced)
+            on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
+            returning j.id::text as id
+          )
+          select id, false as created from replaced
+          union all
+          select id, true from inserted`),
+      );
+      if (row) return { id: row.id, created: row.created === true };
+      // A live running job holds the key. It keeps running without it, and the loop enqueues
+      // this one. If the job finished or was replaced meanwhile, this changes nothing.
+      await target.execute(sql`
+        update ${table} as j set dedupe_key = null, updated_at = ${now()}
+        where ${mine} and j.status = 'running'`);
+    }
+    // Other callers kept taking the key between the two statements.
+    throw new Error("enqueue with replace kept colliding with other enqueues of the same key");
   }
 
   /**
@@ -479,6 +548,12 @@ export function createJobs(options: JobsOptions): Jobs {
             throw new GroundworkError(
               "invalid_argument",
               "each job needs a payload: { payload, dedupeKey?, delay?, … }.",
+            );
+          }
+          if ("replace" in item && item.replace !== undefined) {
+            throw new GroundworkError(
+              "invalid_argument",
+              "enqueueMany doesn't take replace; use enqueue for each job you want to replace.",
             );
           }
           return await prepare(handler, item.payload, item);

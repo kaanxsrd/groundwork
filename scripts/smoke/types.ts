@@ -179,6 +179,9 @@ const receipt = jobs.define("email.receipt", {
   },
 });
 receipt.enqueue({ orderId: "o1" }, { tx: jsDb, dedupeKey: "receipt:o1", delay: "5m" });
+receipt.enqueue({ orderId: "o1" }, { dedupeKey: "digest:o1", delay: "5m", replace: true });
+// @ts-expect-error enqueueMany doesn't take replace
+receipt.enqueueMany([{ payload: { orderId: "o1" }, dedupeKey: "k", replace: true }]);
 // @ts-expect-error orderId must be a string
 receipt.enqueue({ orderId: 1 });
 const batch: Promise<EnqueueResult[]> = receipt.enqueueMany(

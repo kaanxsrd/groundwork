@@ -95,6 +95,13 @@ export interface EnqueueOptions {
   readonly priority?: number | undefined;
   /** While a job of this type with this key is pending or running, enqueueing it again does nothing. */
   readonly dedupeKey?: string | undefined;
+  /**
+   * With `dedupeKey`, to debounce: instead of keeping the pending job with this key, replace its
+   * payload, timing, priority and `maxAttempts` with this call's. If that job is already running,
+   * it finishes without the key, and this one is enqueued as a new job, so the latest payload
+   * always runs. `created` is `false` when a job was replaced.
+   */
+  readonly replace?: boolean | undefined;
   /** Overrides the type's `maxAttempts`. */
   readonly maxAttempts?: number | undefined;
 }
@@ -105,8 +112,8 @@ export interface EnqueueResult {
   readonly created: boolean;
 }
 
-/** One job for `enqueueMany`: its payload, and any of `enqueue`'s options except `tx`. */
-export interface EnqueueManyItem<TInput> extends Omit<EnqueueOptions, "tx"> {
+/** One job for `enqueueMany`: its payload, and `enqueue`'s options except `tx` and `replace`. */
+export interface EnqueueManyItem<TInput> extends Omit<EnqueueOptions, "tx" | "replace"> {
   readonly payload: TInput;
 }
 

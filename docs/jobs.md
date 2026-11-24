@@ -78,6 +78,13 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
 - `tx`: enqueue inside your transaction.
 - `runAt` / `delay`: not before a time, or not before `"10m"` from now.
 - `dedupeKey`: while a job of the same type and key is pending or running, enqueueing it again returns that job (`created: false`) instead of adding another, even under concurrent enqueues. Once the job finishes, the key is free again. For "only ever once" (one receipt per order, forever), record that in your own table, in the same transaction.
+- `replace: true` (with `dedupeKey`) debounces instead: the pending job with that key takes this call's payload, timing, priority and `maxAttempts`, and keeps its id (`created: false`). Each change pushes the job back, so it runs once, after things settle:
+
+  ```ts
+  await sendDigest.enqueue({ userId }, { dedupeKey: `digest:${userId}`, delay: "5m", replace: true });
+  ```
+
+  If the job with that key is already running, it keeps running but gives up the key, and this call enqueues a new job (`created: true`): the running one may have read its data already, so the latest change still gets a run. With several workers the two can overlap. A running job whose worker has stopped (its lease ran out) is replaced like a pending one. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
 
 ### Many at once
 

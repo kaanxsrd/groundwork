@@ -31,11 +31,11 @@ await jobs.work({ concurrency: 4, signal });
 
 ### EnqueueManyItem
 
-One job for `enqueueMany`: its payload, and any of `enqueue`'s options except `tx`.
+One job for `enqueueMany`: its payload, and `enqueue`'s options except `tx` and `replace`.
 
 #### Extends
 
-- `Omit`\<[`EnqueueOptions`](#enqueueoptions), `"tx"`\>
+- `Omit`\<[`EnqueueOptions`](#enqueueoptions), `"tx"` \| `"replace"`\>
 
 #### Type Parameters
 
@@ -140,6 +140,15 @@ Overrides the type's `maxAttempts`.
 > `readonly` `optional` **priority?**: `number`
 
 Overrides the type's priority.
+
+##### replace?
+
+> `readonly` `optional` **replace?**: `boolean`
+
+With `dedupeKey`, to debounce: instead of keeping the pending job with this key, replace its
+payload, timing, priority and `maxAttempts` with this call's. If that job is already running,
+it finishes without the key, and this one is enqueued as a new job, so the latest payload
+always runs. `created` is `false` when a job was replaced.
 
 ##### runAt?
 
