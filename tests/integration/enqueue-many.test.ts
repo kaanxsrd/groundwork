@@ -57,6 +57,51 @@ async function thrown(fn: () => Promise<unknown>): Promise<unknown> {
   throw new Error("expected it to throw");
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Waits until some statement in this database is waiting for a row lock. */
+async function untilSomeoneWaitsForALock(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const [row] = await database.current.rows<{ waiting: number }>(
+      sql`select count(*)::int as waiting from pg_stat_activity
+        where datname = current_database() and wait_event_type = 'Lock'`,
+    );
+    if ((row?.waiting ?? 0) > 0) return;
+    if (Date.now() > deadline) throw new Error("nobody started waiting for a lock");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/**
+ * Holds a statement's row changes in an open transaction on another connection until `commit`
+ * is called, so a statement that runs meanwhile has to wait for them.
+ */
+async function holdOpen<T>(statement: ReturnType<typeof sql>) {
+  const connection = database.current.connect({ max: 1 });
+  const done = deferred();
+  const ran = Promise.withResolvers<T[]>();
+  const transaction = connection.db.transaction(async (tx) => {
+    const result = (await tx.execute(statement)) as unknown as T[] | { rows: T[] };
+    ran.resolve(Array.isArray(result) ? result : result.rows);
+    await done.promise;
+  });
+  const rows = await ran.promise;
+  return {
+    rows,
+    commit: async () => {
+      done.resolve();
+      await transaction;
+    },
+  };
+}
+
 describe("enqueueMany", () => {
   test("enqueues every job in one statement, in order, each with its own options", async () => {
     const clock = createTestClock(T0);
@@ -229,5 +274,96 @@ describe("enqueueMany", () => {
     const results = await handle.enqueueMany(exactly);
     expect(new Set(results.map((result) => result.id)).size).toBe(1_000);
     expect(statements).toHaveLength(1);
+  });
+});
+
+describe("enqueueMany under concurrency", () => {
+  test("calls that share keys in a different order don't deadlock", async () => {
+    const db = database.current;
+    const keys = Array.from({ length: 200 }, (_, i) => `k${i}`);
+    for (let round = 0; round < 3; round++) {
+      const type = unique("many-order");
+      const [forward, backward] = [0, 1].map(() =>
+        jobsOn(db.connect({ max: 1 })).define(type, { run(_payload: { n: number }) {} }),
+      );
+      const batch = (order: string[], n: number) =>
+        order.map((dedupeKey) => ({ payload: { n }, dedupeKey }));
+      // Before, Postgres aborted one of these with "deadlock detected".
+      const [a, b] = await Promise.all([
+        forward?.enqueueMany(batch(keys, 1)),
+        backward?.enqueueMany(batch([...keys].reverse(), 2)),
+      ]);
+      const created = [...(a ?? []), ...(b ?? [])].filter((result) => result.created);
+      expect(created).toHaveLength(keys.length);
+      expect(await rowsOfType(type)).toHaveLength(keys.length);
+    }
+  }, 60_000);
+
+  test("a duplicate in the call gets the new job's id when the old job finishes meanwhile", async () => {
+    const type = unique("many-finished");
+    const handle = jobsOn(database.current).define(type, { run(_payload: { n: number }) {} });
+    const old = await handle.enqueue({ n: 0 }, { dedupeKey: "a" });
+    // The old job finishes in a transaction that commits while enqueueMany waits for it.
+    const finishing = await holdOpen(
+      sql`update ${jobsTable} set status = 'completed', completed_at = now() where id = ${old.id}::uuid`,
+    );
+    const pending = handle.enqueueMany([
+      { payload: { n: 1 }, dedupeKey: "a" },
+      { payload: { n: 2 }, dedupeKey: "a" },
+    ]);
+    await untilSomeoneWaitsForALock();
+    await finishing.commit();
+    const [first, second] = await pending;
+    expect(first?.created).toBe(true);
+    expect(first?.id).not.toBe(old.id);
+    // Before, the second got the finished job's id.
+    expect(second).toEqual({ id: first?.id ?? "missing", created: false });
+  });
+
+  test("a duplicate that commits and finishes between the two statements is still found", async () => {
+    const type = unique("many-vanished");
+    const real = database.current.db;
+    let afterFirst: (() => Promise<void>) | undefined;
+    const db = {
+      execute: async (query: SQLWrapper) => {
+        const result = await real.execute(query);
+        const hook = afterFirst;
+        afterFirst = undefined;
+        await hook?.();
+        return result;
+      },
+    };
+    const handle = jobsOn({ db: db as never }).define(type, { run(_payload: { n: number }) {} });
+    // Another enqueuer's job with the same key, not committed yet when the statement starts.
+    const other = await holdOpen<{ id: string }>(
+      sql`insert into ${jobsTable} (type, payload, dedupe_key) values (${type}, '{}', 'b') returning id::text as id`,
+    );
+    const otherId = other.rows[0]?.id;
+    // …and it finishes before enqueueMany looks for it again.
+    afterFirst = async () => {
+      await real.execute(
+        sql`update ${jobsTable} set status = 'completed', completed_at = now() where id = ${otherId}::uuid`,
+      );
+    };
+    const pending = handle.enqueueMany([
+      { payload: { n: 1 }, dedupeKey: "b" },
+      { payload: { n: 2 } },
+    ]);
+    await untilSomeoneWaitsForALock();
+    await other.commit();
+    // Before, this threw "found neither", after the other job had already been enqueued.
+    const [duplicate, plain] = await pending;
+    expect(duplicate).toEqual({ id: otherId ?? "missing", created: false });
+    expect(plain?.created).toBe(true);
+  });
+
+  test("tx goes on the call, not on a job", async () => {
+    const handle = jobsOn(database.current).define(unique("many-tx-item"), {
+      run(_payload: { n: number }) {},
+    });
+    const error = await thrown(() =>
+      handle.enqueueMany([{ payload: { n: 1 }, tx: database.current.db } as never]),
+    );
+    expect((error as Error).message).toMatch(/^jobs\[0\]: tx goes on the call/);
   });
 });

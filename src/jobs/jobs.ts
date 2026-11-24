@@ -442,10 +442,11 @@ export function createJobs(options: JobsOptions): Jobs {
     );
     const row = rows[0];
     if (row) return { id: row.id, created: row.created === true };
-    // The duplicate committed after this statement's snapshot was taken: look it up again.
+    // The duplicate committed after this statement's snapshot was taken: look it up again,
+    // whatever its status now. It may have finished already; it's still the job this collided with.
     const [existing] = rowsOf<{ id: string }>(
       await target.execute(
-        sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text and status in ('pending', 'running') limit 1`,
+        sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text order by created_at desc, id desc limit 1`,
       ),
     );
     if (!existing)
@@ -556,6 +557,12 @@ export function createJobs(options: JobsOptions): Jobs {
               "enqueueMany doesn't take replace; use enqueue for each job you want to replace.",
             );
           }
+          if ("tx" in item && item.tx !== undefined) {
+            throw new GroundworkError(
+              "invalid_argument",
+              "tx goes on the call, not on a job: enqueueMany(jobs, { tx }).",
+            );
+          }
           return await prepare(handler, item.payload, item);
         } catch (error) {
           if (!isGroundworkError(error)) throw error;
@@ -598,24 +605,38 @@ export function createJobs(options: JobsOptions): Jobs {
             coalesce(f.run_at, input.now + coalesce(f.delay_ms, 0) * interval '1 millisecond'),
             f.dedupe_key, input.now, input.now
           from firsts as f, input
-          order by f.i
+          -- In key order, so concurrent calls that share keys wait for each other's keys in the
+          -- same order and can't deadlock. Ids were made in the app, so results keep the caller's.
+          order by f.dedupe_key nulls last, f.i
           on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
           returning j.id::text as id, j.dedupe_key
         )
         select 'inserted' as kind, id, dedupe_key from inserted
         union all
+        -- The snapshot can still show a job that finished while the insert waited for it, so a
+        -- key this statement inserted isn't reported as existing too.
         select 'existing', j.id::text, j.dedupe_key from ${table} as j
         where j.type = ${handler.type}::text and j.status in ('pending', 'running')
-          and j.dedupe_key in (select dedupe_key from items where dedupe_key is not null)`),
+          and j.dedupe_key in (select dedupe_key from items where dedupe_key is not null)
+          and j.dedupe_key not in (select dedupe_key from inserted where dedupe_key is not null)`),
     );
 
     const inserted = new Set<string>();
     const byKey = new Map<string, string>();
+    // A job this call created wins over anything else with its key.
     for (const row of rows) {
-      if (row.kind === "inserted") inserted.add(row.id);
+      if (row.kind !== "inserted") continue;
+      inserted.add(row.id);
       if (row.dedupe_key !== null) byKey.set(row.dedupe_key, row.id);
     }
-    // A duplicate that committed after this statement's snapshot was taken: look those up again.
+    for (const row of rows) {
+      if (row.kind === "existing" && row.dedupe_key !== null && !byKey.has(row.dedupe_key)) {
+        byKey.set(row.dedupe_key, row.id);
+      }
+    }
+    // A duplicate that committed after this statement's snapshot was taken: look those up again,
+    // whatever their status now. The duplicate may have finished already; it's still the job
+    // these calls collided with, and the rest of the batch is committed, so throwing would strand it.
     const unknownKeys = [
       ...new Set(
         records.flatMap((record) =>
@@ -628,12 +649,13 @@ export function createJobs(options: JobsOptions): Jobs {
     if (unknownKeys.length > 0) {
       const found = rowsOf<{ id: string; dedupe_key: string }>(
         await target.execute(sql`
-          select id::text as id, dedupe_key from ${table}
-          where type = ${handler.type}::text and status in ('pending', 'running')
+          select distinct on (dedupe_key) id::text as id, dedupe_key from ${table}
+          where type = ${handler.type}::text
             and dedupe_key in (${sql.join(
               unknownKeys.map((key) => sql`${key}::text`),
               sql`, `,
-            )})`),
+            )})
+          order by dedupe_key, created_at desc, id desc`),
       );
       for (const row of found) byKey.set(row.dedupe_key, row.id);
     }
