@@ -2,7 +2,7 @@ import { type SQL, sql } from "drizzle-orm";
 import type { Clock } from "../internal/clock.ts";
 import { lazySubkey, randomHex, type SecretSource, timingSafeEqual } from "../internal/crypto.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
-import { type Duration, parseDuration } from "../internal/duration.ts";
+import { type Duration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
 import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
@@ -96,7 +96,11 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
   );
   const subkey = lazySubkey(options.secret, "idempotency");
   const defaultTtlMs = parseDuration(options.ttl ?? "24h", { label: "ttl", minMs: 1_000 });
-  const leaseMs = parseDuration(options.lease ?? "30s", { label: "lease", minMs: 1_000 });
+  const leaseMs = parseDuration(options.lease ?? "30s", {
+    label: "lease",
+    minMs: 1_000,
+    maxMs: MAX_TIMER_MS,
+  });
   const logger = options.logger ?? consoleLogger;
   const once = createOnceLogger(logger);
 

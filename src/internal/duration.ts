@@ -22,11 +22,19 @@ const UNIT_MS: Readonly<Record<DurationUnit, number>> = {
 
 const DURATION_PATTERN = /^(\d+(?:\.\d+)?)(ms|s|m|h|d|w)$/;
 
+/**
+ * The longest delay a timer can wait: Node and browsers run a `setTimeout` or `setInterval` above
+ * 2^31 - 1 ms (about 24.8 days) after 1ms instead. Durations that drive a timer are capped here.
+ */
+export const MAX_TIMER_MS = 2_147_483_647;
+
 export interface ParseDurationOptions {
   /** Name of the option being parsed, used in the error message (for example `"window"`). */
   readonly label?: string;
   /** Smallest accepted value in milliseconds. Defaults to 0. */
   readonly minMs?: number;
+  /** Largest accepted value in milliseconds, such as {@link MAX_TIMER_MS}. Defaults to none. */
+  readonly maxMs?: number;
 }
 
 /** Whether `value` is a well-formed {@link Duration} string. */
@@ -60,6 +68,14 @@ export function parseDuration(value: Duration, options: ParseDurationOptions = {
     throw new GroundworkError(
       "invalid_argument",
       `Invalid ${label} "${value}": it must be at least ${minMs}ms.`,
+    );
+  }
+  if (options.maxMs !== undefined && ms > options.maxMs) {
+    throw new GroundworkError(
+      "invalid_argument",
+      options.maxMs === MAX_TIMER_MS
+        ? `Invalid ${label} "${value}": it can be at most 24 days, the longest a timer can wait.`
+        : `Invalid ${label} "${value}": it can be at most ${options.maxMs}ms.`,
     );
   }
   return ms;

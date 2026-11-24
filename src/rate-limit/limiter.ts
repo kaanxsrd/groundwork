@@ -1,7 +1,7 @@
 import { type Clock, systemClock } from "../internal/clock.ts";
 import { lazySubkey, type SecretSource } from "../internal/crypto.ts";
 import type { GroundworkDatabase } from "../internal/db.ts";
-import { type Duration, parseDuration } from "../internal/duration.ts";
+import { type Duration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import type { RateLimitsTable } from "../schema/rate-limits.ts";
@@ -119,7 +119,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   const timeoutMs =
     options.timeout === false
       ? null
-      : parseDuration(options.timeout ?? "1s", { label: "timeout", minMs: 1 });
+      : parseDuration(options.timeout ?? "1s", { label: "timeout", minMs: 1, maxMs: MAX_TIMER_MS });
   const clock = options.clock;
   const fallbackClock = clock ?? systemClock;
   const logger = options.logger ?? consoleLogger;

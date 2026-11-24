@@ -4,7 +4,7 @@ import { type SQL, sql } from "drizzle-orm";
 import { toJsonValue } from "../audit/json.ts";
 import type { Clock } from "../internal/clock.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
-import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
+import { type Duration, isDuration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
 import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
@@ -208,7 +208,11 @@ export function createJobs(options: JobsOptions): Jobs {
     JOB_SCHEDULE_COLUMNS,
     "jobSchedules table from groundworkTables()",
   );
-  const leaseMs = parseDuration(options.lease ?? "1m", { label: "lease", minMs: 1_000 });
+  const leaseMs = parseDuration(options.lease ?? "1m", {
+    label: "lease",
+    minMs: 1_000,
+    maxMs: MAX_TIMER_MS,
+  });
   const workerId =
     options.workerId ?? `${hostname()}:${process.pid}:${randomBytes(3).toString("hex")}`;
   if (typeof workerId !== "string" || workerId === "") {
@@ -301,7 +305,11 @@ export function createJobs(options: JobsOptions): Jobs {
       timeoutMs:
         timeout === false
           ? null
-          : parseDuration(timeout as Duration, { label: `timeout of "${type}"`, minMs: 1 }),
+          : parseDuration(timeout as Duration, {
+              label: `timeout of "${type}"`,
+              minMs: 1,
+              maxMs: MAX_TIMER_MS,
+            }),
       priority:
         definition.priority === undefined
           ? 0
@@ -867,6 +875,7 @@ export function createJobs(options: JobsOptions): Jobs {
         signal: workOptions.signal,
         pollMs: parseDuration(workOptions.pollInterval ?? "1s", {
           label: "pollInterval",
+          maxMs: MAX_TIMER_MS,
           minMs: 10,
         }),
         mode: "work",

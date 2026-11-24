@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type Duration, isDuration, parseDuration } from "../../src/internal/duration.ts";
+import {
+  type Duration,
+  isDuration,
+  MAX_TIMER_MS,
+  parseDuration,
+} from "../../src/internal/duration.ts";
 import { GroundworkError } from "../../src/internal/errors.ts";
 
 describe("parseDuration", () => {
@@ -75,6 +80,45 @@ describe("parseDuration", () => {
       expect((error as GroundworkError).code).toBe("invalid_argument");
       expect((error as GroundworkError).message).toContain('Invalid window "soon"');
     }
+  });
+});
+
+describe("durations that drive a timer", () => {
+  test("stop at the longest a timer can wait", () => {
+    expect(parseDuration("24d", { maxMs: MAX_TIMER_MS })).toBe(2_073_600_000);
+    expect(() => parseDuration("25d", { label: "timeout", maxMs: MAX_TIMER_MS })).toThrow(
+      /timeout "25d": it can be at most 24 days/,
+    );
+    expect(() => parseDuration("2s", { maxMs: 1_000 })).toThrow(/at most 1000ms/);
+  });
+
+  test("are checked where they're configured, not at the first timer", async () => {
+    const { createJobs } = await import("../../src/jobs/index.ts");
+    const { createIdempotency } = await import("../../src/idempotency/index.ts");
+    const { createRateLimiter, memoryStore } = await import("../../src/rate-limit/index.ts");
+    const { groundworkTables } = await import("../../src/schema/index.ts");
+    const tables = groundworkTables();
+    const db = { execute: async () => [] };
+    const jobs = createJobs({ db, table: tables.jobs, schedulesTable: tables.jobSchedules });
+    // A 30-day timeout used to fire after 1ms, failing every attempt at once.
+    expect(() => jobs.define("report.monthly", { timeout: "30d", run: () => {} })).toThrow(
+      /at most 24 days/,
+    );
+    expect(() =>
+      createJobs({ db, table: tables.jobs, schedulesTable: tables.jobSchedules, lease: "30d" }),
+    ).toThrow(/at most 24 days/);
+    expect(() => jobs.work({ pollInterval: "30d" })).toThrow(/at most 24 days/);
+    expect(() =>
+      createIdempotency({
+        db,
+        table: tables.idempotencyKeys,
+        secret: "x".repeat(32),
+        lease: "30d",
+      }),
+    ).toThrow(/at most 24 days/);
+    expect(() =>
+      createRateLimiter({ store: memoryStore(), secret: "x".repeat(32), timeout: "30d" }),
+    ).toThrow(/at most 24 days/);
   });
 });
 
