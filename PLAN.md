@@ -730,6 +730,12 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - `null` passes through, to fit `clientIp(request)` and `withRateLimit`'s "null isn't counted"; a non-address throws `invalid_argument` without echoing it, since subjects are kept out of errors. Overloads return `string` for a `string`, so `rule.check(ipSubject(ip))` type-checks and a nullable address doesn't.
   - It's a helper, not a default: subjects are the app's choice, and changing them would silently reset existing limits. Every IP example in the docs and README now uses it.
   - 8 unit tests; mutation checks: no masking fails 3, mapped addresses treated as IPv6 fail 3.
+- 2026-11-24: **`enqueueMany`**, the batch enqueue the Phase 4 log left out. `handle.enqueueMany(jobs, { tx })`:
+  - **One statement** for up to 1,000 jobs of one type (bigger batches are refused; call it per 1,000 in one `tx`). The jobs travel as one `jsonb` parameter through `jsonb_to_recordset`; each payload is JSON text cast per row, because `jsonb_to_recordset` turns a JSON `null` in a `jsonb` column into SQL `NULL`, and `enqueue(undefined)` stores JSON `null`.
+  - **Per-job options** (`runAt`, `delay`, `priority`, `dedupeKey`, `maxAttempts`), validated by the same `prepare()` that `enqueue` now uses, so both refuse the same input. `tx` is per call: a job can't name another transaction. Every job is checked before anything is sent, so one bad job enqueues none, and errors are prefixed `jobs[i]:`. A job without a `payload` key is refused, or `enqueueMany([order])` would read the order as options and enqueue no payload.
+  - **Results in order.** Ids are generated in the app (`randomUUID`), so each result matches its job without relying on the order of `INSERT … RETURNING`.
+  - **Dedupe:** against existing jobs, an `existing` branch returns their ids in the same statement. Between jobs in one call, `distinct on (dedupe_key) … order by i` inserts only the first, as two `enqueue` calls in a row would. A duplicate committed after the statement's snapshot is looked up afterwards, as `enqueue` does.
+  - 7 integration tests, including 10 concurrent calls racing on the same 5 keys. Mutation checks: the last duplicate winning fails 1; an existing-jobs branch that finds nothing fails 1 (the follow-up lookup would have hidden it, so that test also asserts one statement); unprefixed errors fail 1; accepting a bare payload fails 1; a null payload as SQL `NULL` fails 1.
 
 ## 11. Alternatives check (2026-11-19)
 
