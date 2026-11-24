@@ -699,6 +699,15 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
 
   Still open: `run()`'s `Jsonify<T>` cast for generic results; an audit column mapping or explicit ids for bubblehouse-dk's audit log; Faultline and PostgreSQL 15.
 - 2026-11-23: **Published 0.3.0** (first try, trusted publishing, provenance). VaultDrop's and vante.app's branches moved to it, as the two apps with schedules. The rest only rate-limit, which 0.3.0 doesn't change. The `Jsonify<T>` cast is documented rather than changed: no signature can avoid it without claiming JSON keeps `Date`s. The owner decided the two open items: Faultline requires PostgreSQL 16 (docs only), and bubblehouse-dk keeps its audit log and outbox. Nothing from Phase 7's dogfooding is left open.
+- 2026-11-24: Toward 1.0's "documented and stable public API": an audit of all 138 exports against the docs found eight runtime exports no page mentioned (documented in `a52484b`). A generated API reference, `docs/api/`, now covers every type; TypeDoc runs from `tools/api-docs` on TypeScript 6, and CI fails if it's stale.
+- 2026-11-24: Toward 1.0's "no open correctness bugs": a review of `src/` found nine issues, all fixed in 0.3.1, each with a test:
+  - A long-running `work({ signal })` leaked one abort listener per idle poll.
+  - `apiKeys.create()` retried on a unique violation thrown by its audit hook, inserting extra keys. Without a `tx`, a failed audit write also left an active key nobody held. Only the insert is retried now, and that key is deleted. The docs no longer claim the change and its audit entry share a transaction without `tx`.
+  - A 1 s lease (jobs or idempotency) was renewed exactly as it expired. Renewal is now every third of the lease.
+  - A job timeout over 24.8 days fired after 1 ms. Durations that drive a timer are now capped at 24 days when configured.
+  - `rotate()` didn't retry a prefix collision; a per-key limit had no upper bound; a missing `scheduledAt` gave an Invalid Date; and `gw.jobs` could be cached without its cleanup schedules.
+
+  1.0 still needs two apps confirmed in production. Hookline and vante.app serve groundwork today. VaultDrop and Faultline deploy, but can't reach their databases, as on their 20 November builds; that problem isn't groundwork's.
 
 ## 11. Alternatives check (2026-11-19)
 
