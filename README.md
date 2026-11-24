@@ -43,7 +43,7 @@ Self-hosted Next.js + Drizzle + Postgres apps keep hand-writing the same five pi
 - **Your transaction.** Pass `{ tx }`, and an audit entry or an enqueued job commits or rolls back with the change that caused it.
 - **Your names, typed.** Scopes, audit actions and job payloads are declared once, and TypeScript checks every place they're used.
 - **Only Postgres.** A rate-limit check is one round trip. Redis is an option for rate limits, never a requirement.
-- **Secure by default.** API keys, rate-limit subjects and idempotency keys are stored as HMACs, comparisons are timing-safe, configured audit fields are redacted, and secrets never reach a log.
+- **Secure by default.** API keys, rate-limit subjects and idempotency keys are stored as HMACs under a secret you can rotate without re-issuing keys, comparisons are timing-safe, configured audit fields are redacted, and secrets never reach a log.
 
 ## What's inside
 
@@ -72,7 +72,7 @@ Keys that secret scanners recognise, stored as HMACs. Rotation with a grace peri
     <td width="50%" valign="top">
 
 **[Background jobs](docs/jobs.md)**<br>
-Typed jobs enqueued in your transaction and claimed in batches. Leases bring back a crashed worker's jobs, retries back off with jitter, and schedules run each tick exactly once.
+Typed jobs enqueued in your transaction, one at a time or a thousand in one statement, and claimed in batches. Leases bring back a crashed worker's jobs, retries back off with jitter, a dedupe key can debounce, and schedules run each tick exactly once.
 
 </td>
   </tr>
@@ -257,11 +257,12 @@ export const sendReceipt = gw.jobs.define("email.receipt", {
 });
 
 await sendReceipt.enqueue({ orderId }, { tx, dedupeKey: `receipt:${orderId}` });
+await sendReceipt.enqueueMany(orders.map((order) => ({ payload: { orderId: order.id } })), { tx });
 gw.jobs.schedule("reports.nightly", { every: "1d" }, () => buildReports());
 await gw.jobs.work({ concurrency: 4, signal }); // or runOnce() from a cron route
 ```
 
-[Docs](docs/jobs.md)
+`enqueueMany` enqueues up to 1,000 jobs in one statement. With `replace: true`, a `dedupeKey` debounces instead: each call pushes the pending job back with the latest payload. [Docs](docs/jobs.md)
 
 ### Idempotency keys
 
@@ -316,7 +317,7 @@ groundwork isn't for edge runtimes, databases other than Postgres, or stacks tha
 
 | Guide | What's inside |
 | --- | --- |
-| [Core concepts](docs/core-concepts.md) | Durations, the app secret, errors, logging and clocks |
+| [Core concepts](docs/core-concepts.md) | Durations, the app secret and rotating it, errors, logging and clocks |
 | [Table factories](docs/schema.md) | Putting groundwork's tables in your schema, column by column |
 | [Rate limiting](docs/rate-limiting.md) | Algorithms, headers, failure modes, Redis |
 | [Audit log](docs/audit.md) | Recording in transactions, diffs, redaction, querying, retention |
