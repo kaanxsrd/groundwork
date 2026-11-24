@@ -43,12 +43,14 @@ export const GET = withApiKey<RouteContext<"/posts/[id]">>(["posts:read"], async
 Checks a [rate-limit rule](rate-limiting.md) for the subject `key` returns. Over the limit, it answers `429` with `Retry-After` and `RateLimit` headers and a JSON body (`rate_limited`). Otherwise the handler runs and the headers are added to its response. Return `null` from `key` to let a request through without counting it:
 
 ```ts
+import { ipSubject } from "@vantedev/groundwork/rate-limit";
+
 const signups = gw.rateLimit.rule({ name: "signup:ip", limit: 5, window: "1h" });
 
-export const POST = withRateLimit(signups, (request) => clientIp(request), handleSignup);
+export const POST = withRateLimit(signups, (request) => ipSubject(clientIp(request)), handleSignup);
 ```
 
-If there's no trusted proxy, `clientIp` is `null` and that example limits nothing. Behind no proxy at all, limit by something else, such as the user or API key.
+[`ipSubject`](rate-limiting.md#limiting-by-ip-address) counts an IPv6 client's whole `/64` as one subject, so it can't dodge the limit by switching addresses. If there's no trusted proxy, `clientIp` is `null` and that example limits nothing. Behind no proxy at all, limit by something else, such as the user or API key.
 
 ## `withIdempotency(options, handler)`
 

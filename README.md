@@ -213,11 +213,11 @@ Each one also works on its own, without `createGroundwork`: `createRateLimiter({
 const login = gw.rateLimit.rule({ name: "login:ip", limit: 5, window: "15m" });
 const api = gw.rateLimit.rule({ name: "api", algorithm: "token-bucket", rate: 10, per: "1s", burst: 120 });
 
-const result = await login.check(ip);
+const result = await login.check(ipSubject(ip));
 if (!result.allowed) return new Response("Too many attempts", { status: 429, headers: result.headers });
 ```
 
-Subjects are stored as HMACs, never as raw IPs or user ids. A batch that doesn't fit is rejected without using anything. [Docs](docs/rate-limiting.md)
+`ipSubject()` counts an IPv6 client's whole `/64` as one subject, so it can't dodge a limit by switching addresses. Subjects are stored as HMACs, never as raw IPs or user ids. A batch that doesn't fit is rejected without using anything. [Docs](docs/rate-limiting.md)
 
 ### Audit log
 

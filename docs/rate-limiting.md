@@ -37,7 +37,8 @@ Fixed-window and token-bucket rate limits stored in your Postgres, checked in on
 3. Check, and pass the headers on:
 
    ```ts
-   const result = await loginLimit.check(ip);
+   // ipSubject, from "@vantedev/groundwork/rate-limit": one subject per IPv6 /64 (see below).
+   const result = await loginLimit.check(ipSubject(ip));
    if (!result.allowed) {
      return new Response("Too many attempts", { status: 429, headers: result.headers });
    }
@@ -77,6 +78,23 @@ const result = await rule.check(subject, { cost: 1 });
 ```
 
 The `subject` is whatever you limit by: an IP address, a user id, an API key id. groundwork stores an HMAC of it, never the value itself.
+
+### Limiting by IP address
+
+Pass an address through `ipSubject()` rather than using it as it is:
+
+```ts
+import { ipSubject } from "@vantedev/groundwork/rate-limit";
+
+const result = await loginLimit.check(ipSubject(ip));
+```
+
+- **IPv6 counts by network.** A single client usually holds a whole `/64`: 18 quintillion addresses it can send each request from. Limited per address, it would never hit the limit. `ipSubject("2001:db8:1:2::abcd")` is `"2001:db8:1:2::/64"`. Some providers give each customer a `/56` or a `/48`; `ipSubject(ip, { ipv6Prefix: 56 })` limits those as one.
+- **IPv4 counts by address.** Behind carrier-grade NAT many people share one address, so anything wider would block them together.
+- **One spelling.** Case, leading zeros, brackets and zone ids don't change the subject, and an IPv4-mapped address (`::ffff:203.0.113.7`) counts as the IPv4 address it carries.
+- `null` comes back as `null`, so `ipSubject(clientIp(request))` works with [`withRateLimit`](next.md#withratelimitrule-key-handler), where a `null` subject isn't counted. Anything that isn't an IP address throws `invalid_argument`, without repeating the value.
+
+Switching an existing rule to `ipSubject()`, or changing `ipv6Prefix`, changes its subjects, so those counts start over.
 
 **`cost`** (default 1) is how much this request uses, for example the number of events in a batch. A request whose cost doesn't fit is denied **and uses nothing**, so one oversized batch can't burn the rest of a window. A cost above the limit or burst is always denied. `cost: 0` reads the current state without using anything.
 

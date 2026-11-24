@@ -65,7 +65,7 @@ describe("package.json", () => {
     const expected: Record<string, string[]> = {
       ".": ["GroundworkError", "createGroundwork", "isGroundworkError", "pinoLogger"],
       "./schema": ["DEFAULT_PREFIX", "groundworkTables"],
-      "./rate-limit": ["createRateLimiter", "memoryStore", "redisStore"],
+      "./rate-limit": ["createRateLimiter", "ipSubject", "memoryStore", "redisStore"],
       "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
       "./api-keys": ["API_KEY_AUDIT_ACTIONS", "apiKeyAuditEvent", "createApiKeys"],
       "./jobs": ["backoffDelayMs", "createJobs"],

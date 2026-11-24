@@ -12,6 +12,7 @@
  *
  * @module @vantedev/groundwork/rate-limit
  */
+export { type IpSubjectOptions, ipSubject } from "./ip-subject.ts";
 export { createRateLimiter, type RateLimiterOptions } from "./limiter.ts";
 export { type MemoryStore, type MemoryStoreOptions, memoryStore } from "./memory-store.ts";
 export { type RedisEvalClient, type RedisStoreOptions, redisStore } from "./redis-store.ts";

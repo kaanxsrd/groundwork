@@ -17,6 +17,7 @@ import { createJobs, type RunSummary, type StandardSchemaV1 } from "@vantedev/gr
 import { createRouteHelpers, getClientIp, jobsRoute } from "@vantedev/groundwork/next";
 import {
   createRateLimiter,
+  ipSubject,
   type RateLimitResult,
   redisStore,
 } from "@vantedev/groundwork/rate-limit";
@@ -69,6 +70,13 @@ limiter.rule({ name: "x", limit: 5, window: "15m", rate: 1 });
 // @ts-expect-error durations need a unit
 limiter.rule({ name: "x", limit: 5, window: 900 });
 const result: Promise<RateLimitResult> = rule.check("203.0.113.9", { cost: 2 });
+rule.check(ipSubject("2001:db8::1", { ipv6Prefix: 56 }));
+declare const maybeIp: string | null;
+const maybeSubject: string | null = ipSubject(maybeIp);
+// @ts-expect-error a missing address gives a null subject, which check() can't take
+rule.check(ipSubject(maybeIp));
+// @ts-expect-error ipv6Prefix is a number of bits
+ipSubject("::1", { ipv6Prefix: "64" });
 
 const gw = createGroundwork({ db: pgDb, tables: { rateLimits }, secret, logger });
 const previous: PreviousSecretsSource = () => [secret];
@@ -237,5 +245,5 @@ const ip: string | null = getClientIp(new Headers(), { trustProxy: "vercel" });
 // @ts-expect-error not a trustProxy preset
 getClientIp(new Headers(), { trustProxy: "fly" });
 
-void [window, noUnit, code, opsName, result, retry, recorded, page, verified, worked];
+void [window, noUnit, code, opsName, result, retry, recorded, page, verified, worked, maybeSubject];
 void [ran, asDate, handled, config, typedParams, cron, ip];

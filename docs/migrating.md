@@ -56,7 +56,7 @@ These are the apps groundwork was extracted from, and the order that moves each 
 
 ### vante.app
 
-1. **Rate limiting:** rules map one to one. vante.app's IPv6 `/64` bucketing isn't built in yet; keep `ipBucket()` and pass its result as the subject.
+1. **Rate limiting:** rules map one to one. Replace vante.app's `ipBucket()` with [`ipSubject()`](rate-limiting.md#limiting-by-ip-address), which buckets IPv6 by `/64` the same way, but keeps IPv4-mapped addresses (`::ffff:…`) apart instead of putting them all in one bucket.
 2. **Audit log:** copy `audit_logs`, and add every old action name to `audit.actions`.
 3. **API keys:** copy `api_keys`, verify with `legacyHash` and the old pepper, and keep country checks in your own code (they're stored in `metadata`).
 4. **Jobs:** move pending jobs as above. `scripts/worker.ts` becomes `gw.jobs.work({ signal })`, and `claimInterval` becomes `gw.jobs.schedule`.

@@ -87,6 +87,19 @@ export function canonicalIp(text: string): string | null {
   return value === null ? null : formatIp(value);
 }
 
+/**
+ * The network an address counts as, for grouping clients: IPv4 (and IPv4-mapped IPv6) is the
+ * address itself; IPv6 is cut to its first `ipv6Prefix` bits, as `2001:db8:1:2::/64`. `null` if
+ * `text` isn't an address. `ipv6Prefix` must be 0 to 128.
+ */
+export function ipNetwork(text: string, ipv6Prefix: number): string | null {
+  const value = parseIp(text);
+  if (value === null) return null;
+  if (isMappedV4(value)) return formatIp(value);
+  const mask = ipv6Prefix === 0 ? 0n : (ALL_ONES << BigInt(128 - ipv6Prefix)) & ALL_ONES;
+  return `${formatIp(value & mask)}/${ipv6Prefix}`;
+}
+
 function formatIp(value: bigint): string {
   if (isMappedV4(value)) {
     const v4 = value & 0xffffffffn;
