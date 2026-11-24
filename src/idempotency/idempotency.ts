@@ -4,6 +4,7 @@ import { lazySubkey, randomHex, type SecretSource, timingSafeEqual } from "../in
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
+import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { assertTableColumns } from "../internal/table.ts";
 import { IDEMPOTENCY_KEY_COLUMNS, type IdempotencyKeysTable } from "../schema/idempotency-keys.ts";
@@ -171,20 +172,17 @@ export function createIdempotency(options: IdempotencyOptions): Idempotency {
 
   /** Renews the lease every third of its length until the returned function is called. */
   function holdLease(key: string, token: string): () => void {
-    const timer = setInterval(
-      () => {
-        Promise.resolve(
-          db.execute(sql`
+    const timer = setInterval(() => {
+      Promise.resolve(
+        db.execute(sql`
             update ${table} set locked_until = ${now()} + ${interval(leaseMs)}
             where key = ${key} and locked_by = ${token} and completed_at is null`),
-        ).catch((error: unknown) => {
-          once.once("warn", "heartbeat", "Could not renew an idempotency key's lease; retrying.", {
-            error: errorText(error),
-          });
+      ).catch((error: unknown) => {
+        once.once("warn", "heartbeat", "Could not renew an idempotency key's lease; retrying.", {
+          error: errorText(error),
         });
-      },
-      Math.max(1_000, Math.floor(leaseMs / 3)),
-    );
+      });
+    }, renewEveryMs(leaseMs));
     timer.unref?.();
     return () => clearInterval(timer);
   }

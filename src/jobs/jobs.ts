@@ -6,6 +6,7 @@ import type { Clock } from "../internal/clock.ts";
 import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError } from "../internal/errors.ts";
+import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { type StandardSchemaV1, validateWith } from "../internal/standard-schema.ts";
 import { assertTableColumns } from "../internal/table.ts";
@@ -646,24 +647,21 @@ export function createJobs(options: JobsOptions): Jobs {
             error.name = "TimeoutError";
             controller.abort(error);
           }, handler.timeoutMs);
-    const heartbeat = setInterval(
-      () => {
-        extendLease(job)
-          .then((kept) => {
-            if (!kept && !controller.signal.aborted) {
-              const error = new Error("This worker lost the job's lease.");
-              error.name = "LeaseLostError";
-              controller.abort(error);
-            }
-          })
-          .catch((error: unknown) => {
-            once.once("warn", "heartbeat", "Could not renew a job lease; retrying.", {
-              error: errorText(error),
-            });
+    const heartbeat = setInterval(() => {
+      extendLease(job)
+        .then((kept) => {
+          if (!kept && !controller.signal.aborted) {
+            const error = new Error("This worker lost the job's lease.");
+            error.name = "LeaseLostError";
+            controller.abort(error);
+          }
+        })
+        .catch((error: unknown) => {
+          once.once("warn", "heartbeat", "Could not renew a job lease; retrying.", {
+            error: errorText(error),
           });
-      },
-      Math.max(1_000, Math.floor(leaseMs / 3)),
-    );
+        });
+    }, renewEveryMs(leaseMs));
     try {
       const running = Promise.resolve().then(() => handler.run(payload, context));
       // A handler that ignores the signal keeps running, but its outcome no longer counts.
