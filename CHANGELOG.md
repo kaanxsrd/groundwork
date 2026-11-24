@@ -1,5 +1,22 @@
 # @vantedev/groundwork
 
+## 0.3.1
+
+### Patch Changes
+
+- 51bad95: `apiKeys.create()` fixes when recording the key fails (the audit entry, or your `onEvent`):
+  
+  - A unique violation from that hook no longer makes `create()` draw and insert another key. Only a collision on the new key's own prefix is retried.
+  - Without a `tx`, the key it just inserted is deleted before the error is rethrown, so no active key is left whose plaintext nobody received.
+  
+  The docs no longer say changes are recorded in the same transaction without `tx`. groundwork only calls `db.execute()` and can't open one itself.
+- b327209: `apiKeys.rotate()` retries when the new key's prefix collides with an existing one, as `create()` does, instead of failing with a raw database error. A per-key `rateLimit.limit` above 2,147,483,647 is rejected as an invalid argument instead of failing in Postgres.
+- 4e7bb46: - A schedule run whose stored payload has no `scheduledAt` (a hand-written row, say) gets the job's creation time, not an Invalid Date.
+  - If adding groundwork's cleanup schedules throws when `gw.jobs` is first used (a bad `idempotency.ttl`, say), later accesses throw too. Before, they returned an instance without the cleanup schedules.
+- 7667db1: Job and idempotency leases are renewed every third of the lease, also for short leases. The interval used to be at least 1 second, so a `lease: "1s"` was renewed exactly as it ran out, and another worker could claim a job (or another request take over a key) while it was still running. A 2-second lease was renewed at half its length instead of a third.
+- ebbfedc: Durations that drive a timer are capped at 24 days, the longest a `setTimeout` can wait, and anything longer is rejected when configured. Before, a job `timeout: "30d"` made every attempt time out after 1 ms. An oversized `lease`, `pollInterval` or rate-limit `timeout` made its timer fire every millisecond. The cap covers job and schedule `timeout`, jobs and idempotency `lease`, `work({ pollInterval })` and the rate limiter's `timeout`.
+- fbd9d73: `jobs.work({ signal })` no longer adds an abort listener to `signal` on every idle poll. A long-running worker used to leak one listener per poll (about 86,400 a day at a 1-second poll), until Node warned about a possible memory leak.
+
 ## 0.3.0
 
 ### Minor Changes
