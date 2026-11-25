@@ -563,7 +563,8 @@ Schedules `gw.rateLimit.cleanup()` every hour when rate limiting is set up. Defa
 
 > `readonly` `optional` **workerId?**: `string`
 
-Identifies this worker in `locked_by`.
+Identifies this worker in `locked_by`. Defaults to `<hostname>:<pid>:<random>`.
+Each running process needs its own: two that share one can finish each other's jobs.
 
 ##### logger?
 

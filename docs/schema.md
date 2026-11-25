@@ -104,7 +104,7 @@ One row per job. See [background jobs](jobs.md).
 | `type` | `text` | The job type from `define()`, or `schedule:<name>` for schedule ticks. |
 | `payload`, `result` | `jsonb` | What was enqueued, and what the handler returned. |
 | `status` | `text` (check constraint) | `pending`, `running`, `completed`, `failed` or `cancelled`. Not an enum, so nothing extra has to be exported for drizzle-kit. |
-| `priority`, `attempts`, `max_attempts` | `integer` | `attempts` counts the tries of the current payload; a replace or `retry` starts it again. |
+| `priority`, `attempts`, `max_attempts` | `integer` | `attempts` counts the tries so far; a replace or `retry` starts it again. A job that gave up its key to a replace has it set to `max_attempts`, and one whose worker stopped on the last try is one over. |
 | `claims` | `integer` | Every claim, never reset. It fences out workers that lost their lease: only the latest claim can finish the job. |
 | `run_at` | `timestamptz` | When it's due. While running: when its lease ends, so a dead worker's job becomes due again by itself. |
 | `locked_until`, `locked_by` | | The current lease and its worker. |

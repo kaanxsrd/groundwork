@@ -183,7 +183,11 @@ export interface JobRecord {
   readonly status: JobStatus;
   readonly payload: unknown;
   readonly priority: number;
-  /** Tries of the current payload. A replace or `retry` starts again from 0. */
+  /**
+   * Tries so far, counting one that's running. A replace or `retry` starts again from 0. A job
+   * that gave up its key to a replace has it set to `maxAttempts`, so it isn't retried, and one
+   * whose worker stopped on the last try reads `maxAttempts + 1`.
+   */
   readonly attempts: number;
   readonly maxAttempts: number;
   /** Every time a worker claimed it, whatever was replaced or retried since. */

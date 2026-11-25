@@ -56,7 +56,10 @@ export interface JobsOptions {
    * to `"1m"`.
    */
   readonly lease?: Duration | undefined;
-  /** Identifies this worker in `locked_by`. Defaults to `<hostname>:<pid>:<random>`. */
+  /**
+   * Identifies this worker in `locked_by`. Defaults to `<hostname>:<pid>:<random>`.
+   * Each running process needs its own: two that share one can finish each other's jobs.
+   */
   readonly workerId?: string | undefined;
   /** Defaults to Postgres's time. Inject one in tests. */
   readonly clock?: Clock | undefined;
@@ -73,8 +76,13 @@ const MAX_ENQUEUE_MANY = 1_000;
 const PRUNE_BATCH = 5_000;
 const MAX_ERROR_LENGTH = 2_000;
 const MAX_BACKOFF_STEPS = 100;
-/** The largest `maxAttempts`: Postgres's `integer`, which `max_attempts` is. */
-const MAX_ATTEMPTS = 2_147_483_647;
+/**
+ * The largest `maxAttempts`: one less than Postgres's `integer`, which `attempts` and
+ * `max_attempts` are, because a claim can take `attempts` one past `max_attempts`.
+ */
+const MAX_ATTEMPTS = 2_147_483_646;
+/** Postgres's largest `integer`. */
+const MAX_INT = 2_147_483_647;
 /** A schedule's tick may run this early at most (and never more than a tenth of `every`). */
 const SCHEDULE_EARLY_MAX_MS = 5_000;
 
@@ -194,7 +202,7 @@ function attemptsLimit(
   code: "invalid_config" | "invalid_argument",
 ): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_ATTEMPTS) {
-    throw new GroundworkError(code, `${label} must be an integer from 1 to 2,147,483,647.`);
+    throw new GroundworkError(code, `${label} must be an integer from 1 to 2,147,483,646.`);
   }
   return value as number;
 }
@@ -260,6 +268,12 @@ export function createJobs(options: JobsOptions): Jobs {
 
   /** The time a statement works with: the injected clock, else Postgres's `now()`. */
   const now = (): SQL => (clock ? sql`${clock.now().toISOString()}::timestamptz` : sql`now()`);
+  /**
+   * The time to judge a lease by. `now()` is when the transaction began, which inside a caller's
+   * long transaction can be well before the lease ran out.
+   */
+  const current = (): SQL =>
+    clock ? sql`${clock.now().toISOString()}::timestamptz` : sql`statement_timestamp()`;
   const lease = sql`${leaseMs}::float8 * interval '1 millisecond'`;
 
   function addHandler(
@@ -465,17 +479,17 @@ export function createJobs(options: JobsOptions): Jobs {
       );
       const row = rows[0];
       if (row) return { id: row.id, created: row.created === true };
-      // The duplicate committed after this statement's snapshot was taken: look it up again,
-      // whatever its status now. It may have finished already; it's still the job this collided with.
+      // The duplicate committed after this statement's snapshot was taken: look for it again.
       const [existing] = rowsOf<{ id: string }>(
         await target.execute(
           sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text
-            order by (status in ('pending', 'running')) desc, created_at desc, id desc limit 1`,
+            and status in ('pending', 'running') limit 1`,
         ),
       );
       if (existing) return { id: existing.id, created: false };
-      // No job has the key any more: a replace took it from the duplicate before enqueueing its
-      // own. The key is free, so try again.
+      // No live job has the key any more: the duplicate finished, or a replace took its key. The
+      // key is free, as if this call had come a moment later, so try again. A finished job with
+      // the key isn't the answer: it may be any earlier job that had it.
     }
     throw new Error("enqueue found neither a new job nor the duplicate it collided with");
   }
@@ -505,7 +519,7 @@ export function createJobs(options: JobsOptions): Jobs {
     for (let attempt = 0; attempt < 5; attempt++) {
       const [row] = rowsOf<{ id: string; created: boolean }>(
         await target.execute(sql`
-          with input as materialized (select ${now()} as now),
+          with input as materialized (select ${now()} as now, ${current()} as current),
           replaced as (
             update ${table} as j set payload = ${payload}, run_at = ${runAt},
               priority = ${job.priority}::int,
@@ -514,7 +528,7 @@ export function createJobs(options: JobsOptions): Jobs {
               status = 'pending', locked_by = null, locked_until = null, updated_at = input.now
             from input
             where ${mine}
-              and (j.status = 'pending' or (j.status = 'running' and j.locked_until <= input.now))
+              and (j.status = 'pending' or (j.status = 'running' and j.locked_until <= input.current))
             returning j.id::text as id
           ),
           inserted as (
@@ -540,7 +554,7 @@ export function createJobs(options: JobsOptions): Jobs {
       await target.execute(sql`
         update ${table} as j set dedupe_key = null, attempts = greatest(j.attempts, j.max_attempts),
           updated_at = ${now()}
-        where ${mine} and j.status = 'running' and j.locked_until > ${now()}`);
+        where ${mine} and j.status = 'running' and j.locked_until > ${current()}`);
     }
     // Other callers kept taking the key between the two statements.
     throw new Error("enqueue with replace kept colliding with other enqueues of the same key");
@@ -679,28 +693,25 @@ export function createJobs(options: JobsOptions): Jobs {
           byKey.set(row.dedupe_key, row.id);
         }
       }
-      // A duplicate that committed after this statement's snapshot was taken: look those up
-      // again, whatever their status now. The duplicate may have finished already; it's still the
-      // job these calls collided with, and the rest of the batch is committed, so throwing would
-      // strand it.
+      // A duplicate that committed after this statement's snapshot was taken: look for those
+      // again. The rest of the batch is committed, so throwing would strand it.
       const unknownKeys = [
         ...new Set(unresolved(batch).flatMap((record) => record.dedupe_key ?? [])),
       ];
       if (unknownKeys.length > 0) {
         const found = rowsOf<{ id: string; dedupe_key: string }>(
           await target.execute(sql`
-            select distinct on (dedupe_key) id::text as id, dedupe_key from ${table}
-            where type = ${handler.type}::text
+            select id::text as id, dedupe_key from ${table}
+            where type = ${handler.type}::text and status in ('pending', 'running')
               and dedupe_key in (${sql.join(
                 unknownKeys.map((key) => sql`${key}::text`),
                 sql`, `,
-              )})
-            order by dedupe_key, (status in ('pending', 'running')) desc, created_at desc, id desc`),
+              )})`),
         );
         for (const row of found) byKey.set(row.dedupe_key, row.id);
       }
-      // A key no job has any more: a replace took it from the duplicate before enqueueing its
-      // own. The key is free, so those jobs go in again.
+      // A key no live job has any more: the duplicate finished, or a replace took its key. The
+      // key is free, so those jobs go in again.
       batch = unresolved(batch);
     }
 
@@ -786,9 +797,8 @@ export function createJobs(options: JobsOptions): Jobs {
   async function claim(limit: number): Promise<StoredJob[]> {
     const types = [...handlers.keys()];
     if (types.length === 0 || limit < 1) return [];
-    let result: unknown;
-    try {
-      result = await db.execute(sql`
+    // Every worker claims first, so a table without a column this version uses shows up here.
+    return selectRecords(sql`
         with input as materialized (select ${now()} as now),
         candidates as (
           select c.id from ${table} c, input
@@ -802,15 +812,25 @@ export function createJobs(options: JobsOptions): Jobs {
           for update of c skip locked
         )
         update ${table} as j
-        set status = 'running', attempts = j.attempts + 1, claims = j.claims + 1,
+        set status = 'running', attempts = least(j.attempts::bigint + 1, ${MAX_INT}::bigint)::int,
+          claims = j.claims + 1,
           locked_by = ${workerId}::text,
           locked_until = input.now + ${lease}, run_at = input.now + ${lease},
           started_at = coalesce(j.started_at, input.now), updated_at = input.now
         from candidates, input
         where j.id = candidates.id
         returning ${RECORD} as record`);
+  }
+
+  /**
+   * Runs a statement that selects `RECORD`s. If a column is missing, the app hasn't applied a
+   * migration this version needs: the error says so, instead of "column does not exist".
+   */
+  async function selectRecords(statement: SQL): Promise<StoredJob[]> {
+    let result: unknown;
+    try {
+      result = await db.execute(statement);
     } catch (error) {
-      // Every worker claims first, so a table without a column this version uses shows up here.
       if (pgCode(error) !== "42703") throw error;
       throw new GroundworkError(
         "invalid_config",
@@ -818,8 +838,7 @@ export function createJobs(options: JobsOptions): Jobs {
         { cause: error },
       );
     }
-    const rows = rowsOf<{ record: string }>(result);
-    return rows.map((row) => JSON.parse(row.record) as StoredJob);
+    return rowsOf<{ record: string }>(result).map((row) => JSON.parse(row.record) as StoredJob);
   }
 
   /** Only the worker holding the latest claim may change a running job. */
@@ -1082,10 +1101,13 @@ export function createJobs(options: JobsOptions): Jobs {
           }
         } catch (error) {
           if (settings.mode === "once") throw error;
+          // A table that needs a migration isn't an outage, so its own message leads the log.
           once.once(
             "error",
             "claim",
-            "The job worker could not reach the database; it keeps retrying.",
+            isGroundworkError(error) && error.code === "invalid_config"
+              ? `${error.message} The job worker keeps retrying.`
+              : "The job worker could not reach the database; it keeps retrying.",
             {
               error: errorText(error),
             },
@@ -1218,10 +1240,10 @@ export function createJobs(options: JobsOptions): Jobs {
 
     async get(id) {
       if (!validId(id)) return null;
-      const [row] = rowsOf<{ record: string }>(
-        await db.execute(sql`select ${RECORD} as record from ${table} j where j.id = ${id}::uuid`),
+      const [job] = await selectRecords(
+        sql`select ${RECORD} as record from ${table} j where j.id = ${id}::uuid`,
       );
-      return row ? toRecord(JSON.parse(row.record) as StoredJob) : null;
+      return job ? toRecord(job) : null;
     },
 
     async list(filter: JobListFilter = {}) {
@@ -1256,12 +1278,10 @@ export function createJobs(options: JobsOptions): Jobs {
       }
       const where =
         conditions.length === 0 ? sql`` : sql`where ${sql.join(conditions, sql` and `)}`;
-      const rows = rowsOf<{ record: string }>(
-        await db.execute(
-          sql`select ${RECORD} as record from ${table} j ${where} order by j.created_at desc, j.id desc limit ${limit}`,
-        ),
+      const jobs = await selectRecords(
+        sql`select ${RECORD} as record from ${table} j ${where} order by j.created_at desc, j.id desc limit ${limit}`,
       );
-      return rows.map((row) => toRecord(JSON.parse(row.record) as StoredJob));
+      return jobs.map(toRecord);
     },
 
     async retry(id) {

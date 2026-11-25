@@ -1,5 +1,5 @@
 {
-  "id": "1900fe51-70cd-4931-a1c6-9a57aa0b1700",
+  "id": "dcd2a09c-0628-4e14-b673-0ee4e1481c20",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -668,13 +668,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 5
-        },
-        "claims": {
-          "name": "claims",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "run_at": {
           "name": "run_at",

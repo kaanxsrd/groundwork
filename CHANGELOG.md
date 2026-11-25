@@ -4,11 +4,11 @@
 
 ### Minor Changes
 
-- b6f06da: **The jobs table has a new column, `claims`. Run `npx drizzle-kit generate` and apply the migration before you deploy this version.** It adds `"claims" integer DEFAULT 0 NOT NULL` to `gw_jobs`, which is instant in Postgres. Until it's applied, a worker's claim fails with an `invalid_config` error that says to migrate.
+- b6f06da: **The jobs table has a new column, `claims`. Run `npx drizzle-kit generate` and apply the migration before you deploy this version.** It adds `"claims" integer DEFAULT 0 NOT NULL` to `gw_jobs`, which is instant in Postgres. Until it's applied, `runOnce()`, `get()` and `list()` throw an `invalid_config` error that says to migrate, and `work()` logs that error and keeps retrying.
   
   `claims` counts every time a worker claimed the job, and is now what fences workers: only the worker holding the latest claim can complete or fail a job, or renew its lease. Before, the attempt number did that. Since `retry(id)` starts `attempts` again from 0, a worker that stalled past its lease could find its attempt number current again under the same worker id, and complete a retried job with its old result. `claims` never goes down, so that can't happen. `attempts` is now only the count of tries, and job records have `claims` too.
   
-  During a rolling deploy, workers still on 0.3 fence by attempt number, which a `replace` can change under them. Start using `replace` once every worker runs this version.
+  During a rolling deploy, instances still on 0.3 fence workers by attempt number, which a `replace` can change under them, and their `enqueue` can throw when a `replace` takes a key at the wrong moment. Start using `replace` once every instance runs this version. Each process also needs its own `workerId` (the default is unique): a 0.3 and a 0.4 process that share one can finish each other's jobs.
 - d74d840: Job handles have `enqueueMany(jobs, { tx })`: up to 1,000 jobs of one type in one statement, each with `enqueue`'s options (`runAt`, `delay`, `priority`, `dedupeKey`, `maxAttempts`), and results in the same order. Every job is checked first, so one bad job enqueues none, and the error names it (`jobs[2]: …`). A `dedupeKey` also applies between jobs in the same call: the first is created, and the others get its id.
   
   ```ts
@@ -41,9 +41,9 @@
 
 - 5a87112: `enqueue` with a `dedupeKey` no longer throws "found neither a new job nor the duplicate it collided with" when the job it collided with commits just after the statement starts, and changes before it's looked up again:
   
-  - If that job finished, `enqueue` returns its id with `created: false`, as it would have a moment earlier. A job with the key that's still pending or running wins over a finished one, even one created later.
-  - If a `replace` took its key, the key is free, so the job is enqueued (`created: true`).
-- 634954d: A `maxAttempts` above 2,147,483,647, the most the `max_attempts` column holds, is refused when a job type or schedule is defined (`invalid_config`) or a job is enqueued (`invalid_argument`). Before, the type could be defined, and enqueueing failed in Postgres with "integer out of range".
+  - If that job finished, or a `replace` took its key, the key is free, so the job is enqueued (`created: true`), as it would have been a moment later.
+  - If another job with the key is pending or running by then, `enqueue` returns that one's id with `created: false`. An older finished job with the key is never returned.
+- 634954d: A `maxAttempts` above 2,147,483,646, one less than the most the `attempts` and `max_attempts` columns hold, is refused when a job type or schedule is defined (`invalid_config`) or a job is enqueued (`invalid_argument`). Before, the type could be defined, and enqueueing failed in Postgres with "integer out of range".
 
 ## 0.3.2
 

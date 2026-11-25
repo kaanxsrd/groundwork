@@ -368,34 +368,80 @@ describe("enqueue with replace", () => {
     ]);
   });
 
-  test("maxAttempts goes up to Postgres's integer limit, also after a replace", async () => {
+  test("maxAttempts goes up to 2,147,483,646, and a job at the limit is still claimed and failed", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
     const type = unique("huge");
-    const jobs = jobsOn(database.current);
-    const handle = jobs.define(type, {
-      maxAttempts: 2_147_483_647,
-      backoff: { delays: ["1h"] },
-      run(payload: { n: number }) {
-        if (payload.n === 1) throw new Error("not yet");
-      },
+    const other = unique("innocent");
+    const releases: (() => void)[] = [];
+    const victim = jobsOn(database.current, { clock, workerId: "victim", lease: "30s" });
+    victim.define(type, {
+      maxAttempts: 2_147_483_646,
+      timeout: false,
+      run: (payload: { n: number }) =>
+        payload.n === 1 ? new Promise<void>((resolve) => releases.push(resolve)) : undefined,
+    });
+    const handle = jobsOn(database.current, { clock }).define(type, {
+      maxAttempts: 2_147_483_646,
+      run(_payload: { n: number }) {},
     });
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    expect((await jobs.runOnce()).retried).toBe(1);
-    // Before, this added the attempt used to 2,147,483,647 and failed with "integer out of range".
-    expect(await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).toMatchObject({
-      created: false,
+    const victimRun = victim.runOnce({ budgetMs: 50 });
+    await waitUntil(() => releases.length === 1);
+    // A replace takes the key, which sets the running job's attempts to its maxAttempts. Then
+    // its worker stops, and the next claim takes attempts one past it.
+    expect((await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).created).toBe(true);
+    clock.advance("31s");
+    // And a job whose worker kept dying even past that: the claim mustn't overflow either.
+    await database.current.rows(sql`insert into ${jobsTable}
+      (type, payload, status, attempts, max_attempts, locked_by, locked_until, run_at)
+      values (${type}, '{"n":3}', 'running', 2147483647, 2147483646, 'gone',
+        ${clock.now().toISOString()}::timestamptz - interval '1 minute',
+        ${clock.now().toISOString()}::timestamptz - interval '1 minute')`);
+
+    const rescuer = jobsOn(database.current, { clock, workerId: "rescuer" });
+    rescuer.define(type, { maxAttempts: 2_147_483_646, run(_payload: { n: number }) {} });
+    await rescuer.define(other, { run() {} }).enqueue(undefined);
+    // Before, "integer out of range" failed every claim, so no job of any type ran again.
+    expect(await rescuer.runOnce()).toMatchObject({ claimed: 4, completed: 2, failed: 2 });
+    expect(
+      byPayload(await rowsOfType(type)).map((row) => [row.payload, row.status, row.attempts]),
+    ).toEqual([
+      [{ n: 1 }, "failed", 2_147_483_647],
+      [{ n: 2 }, "completed", 1],
+      [{ n: 3 }, "failed", 2_147_483_647],
+    ]);
+    for (const done of releases) done();
+    await victimRun;
+
+    // Above it is refused up front, not by Postgres.
+    expect(() =>
+      rescuer.define(unique("too-many"), { maxAttempts: 2_147_483_647, run() {} }),
+    ).toThrow(/maxAttempts of ".*" must be an integer from 1 to 2,147,483,646/);
+    await expect(handle.enqueue({ n: 4 }, { maxAttempts: 2_147_483_647 })).rejects.toThrow(
+      /^maxAttempts must be an integer from 1 to 2,147,483,646/,
+    );
+  }, 30_000);
+
+  test("inside a transaction that began before a lease ran out, replace still sees it ran out", async () => {
+    const type = unique("old-tx");
+    const handle = jobsOn(database.current).define(type, { run(_payload: { n: number }) {} });
+    // A running job whose lease runs out in a second, and whose worker is gone.
+    const [dead] = await database.current.rows<{ id: string }>(sql`insert into ${jobsTable}
+      (type, payload, status, attempts, claims, locked_by, locked_until, run_at, dedupe_key)
+      values (${type}, '{"n":1}', 'running', 1, 1, 'gone', now() + interval '1 second',
+        now() + interval '1 second', 'k') returning id::text as id`);
+    const result = await database.current.db.transaction(async (tx) => {
+      await tx.execute(sql`select 1`);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      // now() is still when the transaction began, before the lease ran out. Before, the job
+      // looked alive, so it gave up its key and was failed for good with its old payload.
+      return handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true, tx });
     });
-    const [row] = await database.current.rows<{ max_attempts: number }>(
-      sql`select max_attempts from ${jobsTable} where type = ${type}`,
-    );
-    expect(row?.max_attempts).toBe(2_147_483_647);
-    // More than the column holds is refused up front, not by Postgres.
-    expect(() => jobs.define(unique("too-many"), { maxAttempts: 2_147_483_648, run() {} })).toThrow(
-      /maxAttempts of ".*" must be an integer from 1 to 2,147,483,647/,
-    );
-    await expect(handle.enqueue({ n: 3 }, { maxAttempts: 2_147_483_648 })).rejects.toThrow(
-      /^maxAttempts must be an integer from 1 to 2,147,483,647/,
-    );
-  });
+    expect(result).toEqual({ id: dead?.id ?? "missing", created: false });
+    expect((await rowsOfType(type)).map((row) => [row.status, row.payload, row.attempts])).toEqual([
+      ["pending", { n: 2 }, 0],
+    ]);
+  }, 30_000);
 
   test("a running job whose lease runs out during the replace is replaced in place", async () => {
     const clock = createTestClock("2026-04-01T00:00:00Z");
@@ -558,27 +604,92 @@ describe("enqueue with replace", () => {
       expect((await rowsOfType(type)).map((row) => [row.status, row.result])).toEqual([
         ["completed", "n2"],
       ]);
+      // One claim each for the stalled and the recovered run, and one that failed the job.
+      expect(await producer.get(id)).toMatchObject({
+        attempts: 1,
+        claims: via === "replace" ? 2 : 3,
+      });
     }
   }, 30_000);
 
+  test("a worker on 0.3 that takes over a stalled job fences out the stalled 0.4 run", async () => {
+    // 0.3 claims bump attempts and set locked_by, but don't know claims.
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("mixed");
+    const releases: (() => void)[] = [];
+    const stalled = jobsOn(database.current, { clock, workerId: "new", lease: "30s" });
+    const handle = stalled.define(type, {
+      timeout: false,
+      run: () => new Promise<string>((resolve) => releases.push(() => resolve("stale"))),
+    });
+    const { id } = await handle.enqueue(undefined);
+    const stalledRun = stalled.runOnce({ budgetMs: 50 });
+    await waitUntil(() => releases.length === 1);
+    clock.advance("31s");
+    await database.current.rows(sql`update ${jobsTable} set status = 'running',
+      attempts = attempts + 1, locked_by = 'old', locked_until = now() + interval '1 hour',
+      run_at = now() + interval '1 hour' where id = ${id}::uuid`);
+
+    for (const done of releases) done();
+    expect(await stalledRun).toMatchObject({ completed: 0 });
+    expect(await stalled.get(id)).toMatchObject({ status: "running", lockedBy: "old", claims: 1 });
+  }, 30_000);
+
   test("a jobs table without the claims column fails with a message that says to migrate", async () => {
-    await database.current.rows(sql`alter table ${altJobs} drop column claims`);
+    const message =
+      /^The jobs table is missing a column this version of groundwork uses \(.*claims.*\)\. Generate a migration with drizzle-kit and apply it: 0\.4\.0 added "claims"\./;
+    const logger = recordingLogger();
     const jobs = createJobs({
       db: database.current.db,
       table: altJobs,
       schedulesTable: altJobSchedules,
-      logger: recordingLogger(),
+      logger,
     });
     const handle = jobs.define(unique("unmigrated"), { run() {} });
-    await handle.enqueue(undefined);
-    const error = await jobs.runOnce().then(
-      () => undefined,
-      (thrown: unknown) => thrown,
-    );
-    expect(error).toMatchObject({ code: "invalid_config" });
-    expect(String((error as Error).message)).toMatch(
-      /^The jobs table is missing a column this version of groundwork uses \(.*claims.*\)\. Generate a migration with drizzle-kit and apply it: 0\.4\.0 added "claims"\.$/,
-    );
+    const { id } = await handle.enqueue(undefined);
+    await database.current.rows(sql`alter table ${altJobs} drop column claims`);
+    try {
+      const thrown = (fn: () => Promise<unknown>) =>
+        fn().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      for (const error of [
+        await thrown(() => jobs.runOnce()),
+        await thrown(() => jobs.get(id)),
+        await thrown(() => jobs.list()),
+      ]) {
+        expect(error).toMatchObject({ code: "invalid_config" });
+        expect((error as Error).message).toMatch(message);
+      }
+      // A worker logs it as what it is, not as an outage, and keeps going.
+      const stop = new AbortController();
+      const working = jobs.work({ pollInterval: "10ms", signal: stop.signal });
+      await waitUntil(() => logger.lines.length > 0);
+      stop.abort();
+      await working;
+      expect(logger.lines.map((line) => [line.level, line.message])).toEqual([
+        ["error", expect.stringMatching(message)],
+      ]);
+    } finally {
+      await database.current.rows(
+        sql`alter table ${altJobs} add column claims integer not null default 0`,
+      );
+    }
+    // Other errors are left as they are.
+    await database.current.rows(sql`alter table ${altJobs} rename to alt_jobs_gone`);
+    try {
+      const error = await jobs.runOnce().then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toMatchObject({ code: "invalid_config" });
+    } finally {
+      await database.current.rows(
+        sql.raw(`alter table groundwork_alt.alt_jobs_gone rename to alt_jobs`),
+      );
+    }
   });
 
   test("a running job that gave up its key and then lost its worker never runs again", async () => {

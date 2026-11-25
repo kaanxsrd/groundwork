@@ -320,7 +320,7 @@ describe("enqueueMany under concurrency", () => {
     expect(second).toEqual({ id: first?.id ?? "missing", created: false });
   });
 
-  test("a duplicate that commits and finishes between the two statements is still found", async () => {
+  test("a duplicate that commits and finishes between the two statements frees its key", async () => {
     const type = unique("many-vanished");
     const real = database.current.db;
     let afterFirst: (() => Promise<void>) | undefined;
@@ -351,9 +351,11 @@ describe("enqueueMany under concurrency", () => {
     ]);
     await untilSomeoneWaitsForALock();
     await other.commit();
-    // Before, this threw "found neither", after the other job had already been enqueued.
+    // Before the second review, this threw "found neither", after the other job had already
+    // been enqueued. No live job has the key now, so it's enqueued, as a moment later it would be.
     const [duplicate, plain] = await pending;
-    expect(duplicate).toEqual({ id: otherId ?? "missing", created: false });
+    expect(duplicate?.created).toBe(true);
+    expect(duplicate?.id).not.toBe(otherId);
     expect(plain?.created).toBe(true);
   });
 
@@ -372,6 +374,10 @@ describe("enqueueMany under concurrency", () => {
         },
       };
       const handle = jobsOn({ db: db as never }).define(type, { run(_payload: { n: number }) {} });
+      // Keys get reused: yesterday's job had this one, and hasn't been pruned. It mustn't be
+      // mistaken for the duplicate.
+      await database.current.rows(sql`insert into ${jobsTable} (type, payload, dedupe_key, status, created_at, completed_at)
+        values (${type}, '{}', 'k', 'completed', now() - interval '1 day', now() - interval '1 day')`);
       // Another enqueuer's job with the same key, not committed yet when the statement starts.
       const other = await holdOpen<{ id: string }>(
         sql`insert into ${jobsTable} (type, payload, dedupe_key) values (${type}, '{}', 'k') returning id::text as id`,
@@ -394,7 +400,8 @@ describe("enqueueMany under concurrency", () => {
       const results = await pending;
       expect(results.map((result) => result?.created)).toEqual(many ? [true, true] : [true]);
       const holders = await database.current.rows<{ id: string }>(
-        sql`select id::text as id from ${jobsTable} where type = ${type} and dedupe_key = 'k'`,
+        sql`select id::text as id from ${jobsTable} where type = ${type} and dedupe_key = 'k'
+          and status in ('pending', 'running')`,
       );
       expect(holders).toEqual([{ id: results[0]?.id ?? "missing" }]);
     }

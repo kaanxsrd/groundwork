@@ -155,7 +155,10 @@ export interface GroundworkOptions<
     | {
         /** How long a claimed job is reserved; workers renew it while the job runs. Defaults to `"1m"`. */
         readonly lease?: Duration | undefined;
-        /** Identifies this worker in `locked_by`. */
+        /**
+         * Identifies this worker in `locked_by`. Defaults to `<hostname>:<pid>:<random>`.
+         * Each running process needs its own: two that share one can finish each other's jobs.
+         */
         readonly workerId?: string | undefined;
         /**
          * Schedules `gw.rateLimit.cleanup()` every hour when rate limiting is set up. Defaults to

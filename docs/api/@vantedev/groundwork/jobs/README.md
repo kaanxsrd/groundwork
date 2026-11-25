@@ -550,7 +550,9 @@ Created at or after this time.
 
 > `readonly` **attempts**: `number`
 
-Tries of the current payload. A replace or `retry` starts again from 0.
+Tries so far, counting one that's running. A replace or `retry` starts again from 0. A job
+that gave up its key to a replace has it set to `maxAttempts`, so it isn't retried, and one
+whose worker stopped on the last try reads `maxAttempts + 1`.
 
 ##### claims
 
@@ -933,6 +935,7 @@ The `jobs` table from `groundworkTables()`.
 > `readonly` `optional` **workerId?**: `string`
 
 Identifies this worker in `locked_by`. Defaults to `<hostname>:<pid>:<random>`.
+Each running process needs its own: two that share one can finish each other's jobs.
 
 ***
 
