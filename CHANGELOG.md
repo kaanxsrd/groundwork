@@ -1,5 +1,50 @@
 # @vantedev/groundwork
 
+## 0.4.0
+
+### Minor Changes
+
+- b6f06da: **The jobs table has a new column, `claims`. Run `npx drizzle-kit generate` and apply the migration before you deploy this version.** It adds `"claims" integer DEFAULT 0 NOT NULL` to `gw_jobs`, which is instant in Postgres. Until it's applied, a worker's claim fails with an `invalid_config` error that says to migrate.
+  
+  `claims` counts every time a worker claimed the job, and is now what fences workers: only the worker holding the latest claim can complete or fail a job, or renew its lease. Before, the attempt number did that. Since `retry(id)` starts `attempts` again from 0, a worker that stalled past its lease could find its attempt number current again under the same worker id, and complete a retried job with its old result. `claims` never goes down, so that can't happen. `attempts` is now only the count of tries, and job records have `claims` too.
+  
+  During a rolling deploy, workers still on 0.3 fence by attempt number, which a `replace` can change under them. Start using `replace` once every worker runs this version.
+- d74d840: Job handles have `enqueueMany(jobs, { tx })`: up to 1,000 jobs of one type in one statement, each with `enqueue`'s options (`runAt`, `delay`, `priority`, `dedupeKey`, `maxAttempts`), and results in the same order. Every job is checked first, so one bad job enqueues none, and the error names it (`jobs[2]: …`). A `dedupeKey` also applies between jobs in the same call: the first is created, and the others get its id.
+  
+  ```ts
+  await sendReceipt.enqueueMany(
+    orders.map((order) => ({ payload: { orderId: order.id }, dedupeKey: `receipt:${order.id}` })),
+    { tx },
+  );
+  ```
+- 4073a05: `ipSubject(ip)`, from `@vantedev/groundwork/rate-limit`, is the subject to rate-limit an IP address by. An IPv6 address counts as its `/64` network, so a client can't escape a limit by sending each request from another address in it; `{ ipv6Prefix: 56 }` widens that. IPv4 addresses count one by one, and IPv4-mapped IPv6 (`::ffff:203.0.113.7`) counts as the IPv4 address. `null` passes through, so `withRateLimit(rule, (request) => ipSubject(clientIp(request)), handler)` works as before when there's no trusted proxy. The docs now use it in every IP example. Switching a rule to it starts that rule's counts over.
+- 2cc678a: The app secret can be changed without invalidating API keys or idempotency keys: move the old one to `previousSecrets`, on `createGroundwork`, `createApiKeys` or `createIdempotency`.
+  
+  ```ts
+  createGroundwork({ db, tables, secret: newSecret, previousSecrets: [oldSecret] });
+  ```
+  
+  - API keys stored under a previous secret still verify, in the same single statement, and move to the new secret the first time they're used.
+  - Idempotency keys stored under a previous secret are still replayed (or answered 409 or 422) until they expire, so a retry across the change doesn't run twice. While `previousSecrets` is set, each new key is stored under every secret, so during a rolling deploy two copies of a request on instances of either step still run once. A request that crashed under the old secret is taken over as before.
+  - Rate limits start over.
+  
+  It takes a list, newest first, or a function that returns one on first use, as `secret` does. The core-concepts docs explain how to rotate with several instances (two deploys) and how to tell when the old secret can go. The use that moves a key off a previous secret or a `legacyHash` is now always recorded in `lastUsedAt`, even within a minute of the last one.
+- 7f4240d: `enqueue(payload, { dedupeKey, replace: true })` debounces a job: the pending job with that key takes this call's payload, timing, priority and `maxAttempts`, and keeps its id (`created: false`). It starts again from attempt 1, so its backoff and `retry(id)` treat the new payload as a new job.
+  
+  ```ts
+  await sendDigest.enqueue({ userId }, { dedupeKey: `digest:${userId}`, delay: "5m", replace: true });
+  ```
+  
+  If the job with the key is already running, it keeps running without the key, and a new job is enqueued with the latest payload, so no change is lost. Its current attempt becomes its last (its `attempts` is set to its `maxAttempts`, as graphile-worker does), so its out-of-date payload is never retried after the new one. A running job whose worker has stopped is replaced like a pending one, and that worker can no longer complete it. Without `replace`, `dedupeKey` keeps the existing job as before.
+
+### Patch Changes
+
+- 5a87112: `enqueue` with a `dedupeKey` no longer throws "found neither a new job nor the duplicate it collided with" when the job it collided with commits just after the statement starts, and changes before it's looked up again:
+  
+  - If that job finished, `enqueue` returns its id with `created: false`, as it would have a moment earlier. A job with the key that's still pending or running wins over a finished one, even one created later.
+  - If a `replace` took its key, the key is free, so the job is enqueued (`created: true`).
+- 634954d: A `maxAttempts` above 2,147,483,647, the most the `max_attempts` column holds, is refused when a job type or schedule is defined (`invalid_config`) or a job is enqueued (`invalid_argument`). Before, the type could be defined, and enqueueing failed in Postgres with "integer out of range".
+
 ## 0.3.2
 
 ### Patch Changes
