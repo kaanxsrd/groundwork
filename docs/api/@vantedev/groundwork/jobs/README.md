@@ -146,10 +146,9 @@ Overrides the type's priority.
 > `readonly` `optional` **replace?**: `boolean`
 
 With `dedupeKey`, to debounce: instead of keeping the pending job with this key, give it this
-call's payload, timing and priority, and this call's `maxAttempts` on top of the attempts it
-has used. If that job is already running, it finishes without the key and isn't retried, and
-this one is enqueued as a new job, so the latest payload always runs. `created` is `false`
-when a job was replaced.
+call's payload, timing, priority and `maxAttempts`, from attempt 1 again. If that job is
+already running, it finishes without the key and isn't retried, and this one is enqueued as a
+new job, so the latest payload always runs. `created` is `false` when a job was replaced.
 
 ##### runAt?
 
@@ -550,6 +549,14 @@ Created at or after this time.
 ##### attempts
 
 > `readonly` **attempts**: `number`
+
+Tries of the current payload. A replace or `retry` starts again from 0.
+
+##### claims
+
+> `readonly` **claims**: `number`
+
+Every time a worker claimed it, whatever was replaced or retried since.
 
 ##### completedAt
 

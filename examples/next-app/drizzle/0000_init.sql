@@ -75,6 +75,7 @@ CREATE TABLE "gw_jobs" (
 	"priority" integer DEFAULT 0 NOT NULL,
 	"attempts" integer DEFAULT 0 NOT NULL,
 	"max_attempts" integer DEFAULT 5 NOT NULL,
+	"claims" integer DEFAULT 0 NOT NULL,
 	"run_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"locked_until" timestamp with time zone,
 	"locked_by" text,

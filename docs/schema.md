@@ -19,6 +19,8 @@ npx drizzle-kit migrate    # or apply it however you apply migrations today
 
 **Only the tables you export are created.** Destructure just the ones for the modules you use. As more modules land, `groundworkTables()` returns more tables, but nothing changes in your database until you export them.
 
+**After upgrading groundwork, run `npx drizzle-kit generate` again.** A release can add a column to a table you export (0.4.0 added `claims` to `gw_jobs`), and its changelog entry says so. Apply the migration before you deploy the new version: groundwork's statements use the new column straight away.
+
 ## Options
 
 ```ts
@@ -102,7 +104,8 @@ One row per job. See [background jobs](jobs.md).
 | `type` | `text` | The job type from `define()`, or `schedule:<name>` for schedule ticks. |
 | `payload`, `result` | `jsonb` | What was enqueued, and what the handler returned. |
 | `status` | `text` (check constraint) | `pending`, `running`, `completed`, `failed` or `cancelled`. Not an enum, so nothing extra has to be exported for drizzle-kit. |
-| `priority`, `attempts`, `max_attempts` | `integer` | `attempts` counts claims and fences out workers that lost their lease. |
+| `priority`, `attempts`, `max_attempts` | `integer` | `attempts` counts the tries of the current payload; a replace or `retry` starts it again. |
+| `claims` | `integer` | Every claim, never reset. It fences out workers that lost their lease: only the latest claim can finish the job. |
 | `run_at` | `timestamptz` | When it's due. While running: when its lease ends, so a dead worker's job becomes due again by itself. |
 | `locked_until`, `locked_by` | | The current lease and its worker. |
 | `dedupe_key` | `text` | Unique per type while pending or running. |

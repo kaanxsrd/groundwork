@@ -10,7 +10,7 @@ import {
   type SecretSource,
   timingSafeEqual,
 } from "../internal/crypto.ts";
-import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
+import { type GroundworkDatabase, jsonbParam, pgCode, rowsOf, toNumber } from "../internal/db.ts";
 import { type Duration, isDuration, parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
@@ -150,14 +150,6 @@ function statusAt(row: StoredRecord, now: number): ApiKeyStatus {
   if (row.expires_at !== null && row.expires_at <= now) return "expired";
   if (row.suspended_until !== null && row.suspended_until > now) return "suspended";
   return "active";
-}
-
-/** Postgres's error code, whether the driver or Drizzle wrapped it. */
-function pgCode(error: unknown): string | undefined {
-  const own = (error as { code?: unknown })?.code;
-  if (typeof own === "string") return own;
-  const cause = (error as { cause?: { code?: unknown } })?.cause?.code;
-  return typeof cause === "string" ? cause : undefined;
 }
 
 /** A text[] parameter. Drizzle expands JS arrays into lists, so they travel as JSON instead. */

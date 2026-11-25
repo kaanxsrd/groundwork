@@ -3,7 +3,14 @@ import { hostname } from "node:os";
 import { type SQL, sql } from "drizzle-orm";
 import { toJsonValue } from "../audit/json.ts";
 import type { Clock } from "../internal/clock.ts";
-import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../internal/db.ts";
+import {
+  type GroundworkDatabase,
+  jsonbParam,
+  pgCode,
+  pgMessage,
+  rowsOf,
+  toNumber,
+} from "../internal/db.ts";
 import { type Duration, isDuration, MAX_TIMER_MS, parseDuration } from "../internal/duration.ts";
 import { errorText, GroundworkError, isGroundworkError } from "../internal/errors.ts";
 import { renewEveryMs } from "../internal/lease.ts";
@@ -104,6 +111,7 @@ interface StoredJob {
   priority: number;
   attempts: number;
   max_attempts: number;
+  claims: number;
   run_at: number;
   locked_until: number | null;
   locked_by: string | null;
@@ -120,7 +128,7 @@ const ms = (column: string) => `(extract(epoch from ${column}) * 1000)::float8`;
 
 const RECORD = sql.raw(`jsonb_build_object(
   'id', j.id::text, 'type', j.type, 'payload', j.payload, 'status', j.status, 'priority', j.priority,
-  'attempts', j.attempts, 'max_attempts', j.max_attempts, 'run_at', ${ms("j.run_at")},
+  'attempts', j.attempts, 'max_attempts', j.max_attempts, 'claims', j.claims, 'run_at', ${ms("j.run_at")},
   'locked_until', ${ms("j.locked_until")}, 'locked_by', j.locked_by, 'dedupe_key', j.dedupe_key,
   'last_error', j.last_error, 'result', j.result, 'created_at', ${ms("j.created_at")},
   'started_at', ${ms("j.started_at")}, 'completed_at', ${ms("j.completed_at")}, 'updated_at', ${ms("j.updated_at")}
@@ -145,6 +153,7 @@ function toRecord(row: StoredJob): JobRecord {
     priority: row.priority,
     attempts: row.attempts,
     maxAttempts: row.max_attempts,
+    claims: row.claims,
     runAt: new Date(row.run_at),
     lockedUntil: toDate(row.locked_until),
     lockedBy: row.locked_by,
@@ -474,9 +483,8 @@ export function createJobs(options: JobsOptions): Jobs {
   /**
    * `enqueue` with `replace`, to debounce, as graphile-worker's "replace" mode does:
    *
-   * - A pending job with the key gets this call's payload, timing and priority, and this call's
-   *   maxAttempts on top of the attempts it has used. It keeps its id and its attempt count, which
-   *   a replace never lowers because it fences workers.
+   * - A pending job with the key gets this call's payload, timing, priority and maxAttempts, and
+   *   keeps its id. Its attempts start again from 0; its claims don't, since they fence workers.
    * - So does a running job whose lease ran out (its worker is gone): it goes back to pending,
    *   so the old worker can no longer finish it.
    * - A running job that's alive keeps running, but gives up the key, and a new job is enqueued.
@@ -501,10 +509,8 @@ export function createJobs(options: JobsOptions): Jobs {
           replaced as (
             update ${table} as j set payload = ${payload}, run_at = ${runAt},
               priority = ${job.priority}::int,
-              -- Attempts fence workers, so a replace never lowers them; the new payload gets its
-              -- maxAttempts on top of the attempts used so far, up to the column's limit.
-              max_attempts = least(j.attempts::bigint + ${job.maxAttempts}::bigint, ${MAX_ATTEMPTS}::bigint)::int,
-              last_error = null,
+              -- The new payload's tries start from 0. Claims fence workers, so they stay.
+              attempts = 0, max_attempts = ${job.maxAttempts}::int, last_error = null,
               status = 'pending', locked_by = null, locked_until = null, updated_at = input.now
             from input
             where ${mine}
@@ -526,11 +532,13 @@ export function createJobs(options: JobsOptions): Jobs {
       );
       if (row) return { id: row.id, created: row.created === true };
       // A live running job holds the key. It keeps running without it, and the loop enqueues
-      // this one. Its current attempt becomes its last: its payload is out of date, so it must
-      // not be retried after (or alongside) the newer job. If the job finished, was replaced or
-      // lost its lease meanwhile, this changes nothing, and the next round inserts or replaces.
+      // this one. Its current attempt becomes its last, as graphile-worker does it: its payload
+      // is out of date, so it must not be retried after (or alongside) the newer job. Only
+      // attempts change, so its worker still owns it, and a retry gets its full maxAttempts.
+      // If the job finished, was replaced or lost its lease meanwhile, this changes nothing, and
+      // the next round inserts or replaces.
       await target.execute(sql`
-        update ${table} as j set dedupe_key = null, max_attempts = least(j.max_attempts, j.attempts),
+        update ${table} as j set dedupe_key = null, attempts = greatest(j.attempts, j.max_attempts),
           updated_at = ${now()}
         where ${mine} and j.status = 'running' and j.locked_until > ${now()}`);
     }
@@ -778,8 +786,9 @@ export function createJobs(options: JobsOptions): Jobs {
   async function claim(limit: number): Promise<StoredJob[]> {
     const types = [...handlers.keys()];
     if (types.length === 0 || limit < 1) return [];
-    const rows = rowsOf<{ record: string }>(
-      await db.execute(sql`
+    let result: unknown;
+    try {
+      result = await db.execute(sql`
         with input as materialized (select ${now()} as now),
         candidates as (
           select c.id from ${table} c, input
@@ -793,19 +802,29 @@ export function createJobs(options: JobsOptions): Jobs {
           for update of c skip locked
         )
         update ${table} as j
-        set status = 'running', attempts = j.attempts + 1, locked_by = ${workerId}::text,
+        set status = 'running', attempts = j.attempts + 1, claims = j.claims + 1,
+          locked_by = ${workerId}::text,
           locked_until = input.now + ${lease}, run_at = input.now + ${lease},
           started_at = coalesce(j.started_at, input.now), updated_at = input.now
         from candidates, input
         where j.id = candidates.id
-        returning ${RECORD} as record`),
-    );
+        returning ${RECORD} as record`);
+    } catch (error) {
+      // Every worker claims first, so a table without a column this version uses shows up here.
+      if (pgCode(error) !== "42703") throw error;
+      throw new GroundworkError(
+        "invalid_config",
+        `The jobs table is missing a column this version of groundwork uses (${pgMessage(error)}). Generate a migration with drizzle-kit and apply it: 0.4.0 added "claims".`,
+        { cause: error },
+      );
+    }
+    const rows = rowsOf<{ record: string }>(result);
     return rows.map((row) => JSON.parse(row.record) as StoredJob);
   }
 
-  /** Only the worker holding the latest attempt may change a running job. */
+  /** Only the worker holding the latest claim may change a running job. */
   const owned = (job: StoredJob) =>
-    sql`j.id = ${job.id}::uuid and j.status = 'running' and j.locked_by = ${workerId}::text and j.attempts = ${job.attempts}::int`;
+    sql`j.id = ${job.id}::uuid and j.status = 'running' and j.locked_by = ${workerId}::text and j.claims = ${job.claims}::int`;
 
   async function extendLease(job: StoredJob): Promise<boolean> {
     const rows = rowsOf(
@@ -853,8 +872,8 @@ export function createJobs(options: JobsOptions): Jobs {
           update ${schedulesTable} set last_failure_at = ${now()}, last_error = ${lastError}::text, updated_at = ${now()}
           where name = ${handler.schedule}::text and exists (select 1 from done))`
       : sql``;
-    // Decided against the row, not the claimed copy: a replace can make the running attempt the
-    // last one after the job was claimed.
+    // Decided against the row, not the claimed copy: giving up its key to a replace makes the
+    // running attempt the last one after the job was claimed.
     const final = sql`(${exhausted}::boolean or j.attempts >= j.max_attempts)`;
     const [row] = rowsOf<{ status: string }>(
       await db.execute(sql`
@@ -1257,10 +1276,7 @@ export function createJobs(options: JobsOptions): Jobs {
         return rows.length > 0;
       } catch (error) {
         // Another job with the same dedupe key is already pending or running.
-        const code =
-          (error as { code?: unknown; cause?: { code?: unknown } })?.code ??
-          (error as { cause?: { code?: unknown } })?.cause?.code;
-        if (code === "23505") return false;
+        if (pgCode(error) === "23505") return false;
         throw error;
       }
     },

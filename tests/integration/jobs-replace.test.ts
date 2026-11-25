@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { type SQLWrapper, sql } from "drizzle-orm";
 import { createJobs, type JobsOptions } from "../../src/jobs/index.ts";
 import { createTestClock } from "../../src/testing/index.ts";
-import { jobSchedules, jobs as jobsTable } from "../fixtures/schema.ts";
+import { altJobSchedules, altJobs, jobSchedules, jobs as jobsTable } from "../fixtures/schema.ts";
 import { type TestConnection, useTestDatabase } from "../support/database.ts";
 import { recordingLogger, unique } from "../support/rate-limit-conformance.ts";
 
@@ -27,6 +27,8 @@ interface Row extends Record<string, unknown> {
   payload: unknown;
   dedupe_key: string | null;
   attempts: number;
+  max_attempts: number;
+  claims: number;
   result: unknown;
   run_at_ms: number;
 }
@@ -39,7 +41,7 @@ function byPayload(rows: Row[]): Row[] {
 
 async function rowsOfType(type: string): Promise<Row[]> {
   return database.current.rows<Row>(sql`
-    select id::text as id, status, payload, dedupe_key, attempts, result,
+    select id::text as id, status, payload, dedupe_key, attempts, max_attempts, claims, result,
       (extract(epoch from run_at) * 1000)::float8 as run_at_ms
     from ${jobsTable} where type = ${type} order by created_at, id`);
 }
@@ -158,9 +160,9 @@ describe("enqueue with replace", () => {
       id: first.id,
       created: false,
     });
-    expect((await rowsOfType(type)).map((row) => [row.status, row.payload, row.attempts])).toEqual([
-      ["pending", { n: 2 }, 1],
-    ]);
+    expect(
+      (await rowsOfType(type)).map((row) => [row.status, row.payload, row.attempts, row.claims]),
+    ).toEqual([["pending", { n: 2 }, 0, 1]]);
 
     const rescuer = jobsOn(database.current, { clock, workerId: "rescuer" });
     rescuer.define(type, { run: (payload: { n: number }) => `rescued ${payload.n}` });
@@ -173,9 +175,9 @@ describe("enqueue with replace", () => {
     expect(victim.logger.lines.map((line) => line.message)).toEqual([
       expect.stringContaining("lost its lease"),
     ]);
-    expect((await rowsOfType(type)).map((row) => [row.status, row.attempts, row.result])).toEqual([
-      ["completed", 2, "rescued 2"],
-    ]);
+    expect(
+      (await rowsOfType(type)).map((row) => [row.status, row.attempts, row.claims, row.result]),
+    ).toEqual([["completed", 1, 2, "rescued 2"]]);
   }, 30_000);
 
   test("concurrent replaces of one key: one job, and every caller gets its id", async () => {
@@ -314,15 +316,59 @@ describe("enqueue with replace", () => {
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
     expect((await jobs.runOnce()).retried).toBe(1);
     await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true });
-    const [row] = await database.current.rows<{ max_attempts: number; last_error: string | null }>(
-      sql`select max_attempts, last_error from ${jobsTable} where type = ${type}`,
-    );
-    // One attempt used, two to come: the replaced job's own maxAttempts, after the attempts so far.
-    expect(row).toEqual({ max_attempts: 3, last_error: null });
+    const [row] = await database.current.rows<{
+      attempts: number;
+      max_attempts: number;
+      last_error: string | null;
+    }>(sql`select attempts, max_attempts, last_error from ${jobsTable} where type = ${type}`);
+    // The new payload starts again from attempt 1, with the call's maxAttempts.
+    expect(row).toEqual({ attempts: 0, max_attempts: 2, last_error: null });
     expect((await jobs.runOnce()).completed).toBe(1);
   });
 
-  test("maxAttempts goes up to Postgres's integer limit, also when a replace adds to it", async () => {
+  test("a replaced job's attempts and backoff start again, and retry gives it the call's maxAttempts", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("fresh");
+    const jobs = jobsOn(database.current, { clock });
+    const seen: [number, number][] = [];
+    const handle = jobs.define(type, {
+      maxAttempts: 2,
+      backoff: { delays: ["1s", "1h"] },
+      run(payload: { n: number }, { attempt }) {
+        seen.push([payload.n, attempt]);
+        throw new Error("fails");
+      },
+    });
+    await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    expect((await jobs.runOnce()).retried).toBe(1);
+    const { id } = await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true });
+    expect((await jobs.runOnce()).retried).toBe(1);
+    // Attempt 1 of the new payload, so the ladder's first step. Before: attempt 2, and 1h.
+    expect(seen).toEqual([
+      [1, 1],
+      [2, 1],
+    ]);
+    const [waiting] = await rowsOfType(type);
+    expect(waiting?.run_at_ms).toBe(clock.now().getTime() + 1_000);
+
+    clock.advance("1s");
+    expect((await jobs.runOnce()).failed).toBe(1);
+    expect(await jobs.retry(id)).toBe(true);
+    for (let i = 0; i < 4; i++) {
+      await jobs.runOnce();
+      clock.advance("1h");
+    }
+    // Two tries after the retry, as maxAttempts says. Before, three (1 used + 2).
+    expect(seen.slice(3)).toEqual([
+      [2, 1],
+      [2, 2],
+    ]);
+    expect((await rowsOfType(type)).map((row) => [row.status, row.attempts, row.claims])).toEqual([
+      ["failed", 2, 5],
+    ]);
+  });
+
+  test("maxAttempts goes up to Postgres's integer limit, also after a replace", async () => {
     const type = unique("huge");
     const jobs = jobsOn(database.current);
     const handle = jobs.define(type, {
@@ -334,7 +380,7 @@ describe("enqueue with replace", () => {
     });
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
     expect((await jobs.runOnce()).retried).toBe(1);
-    // One attempt used plus 2,147,483,647: before, this failed with "integer out of range".
+    // Before, this added the attempt used to 2,147,483,647 and failed with "integer out of range".
     expect(await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).toMatchObject({
       created: false,
     });
@@ -438,7 +484,102 @@ describe("enqueue with replace", () => {
       [{ n: 1 }, "failed", null],
       [{ n: 2 }, "completed", "k"],
     ]);
+
+    // Retrying it by hand runs it with its full maxAttempts. Before, with as many as it had used.
+    const stale = byPayload(await rowsOfType(type))[0];
+    expect(stale && (await other.retry(stale.id))).toBe(true);
+    const [retried] = byPayload(await rowsOfType(type));
+    expect(retried && [retried.status, retried.attempts, retried.max_attempts]).toEqual([
+      "pending",
+      0,
+      5,
+    ]);
   }, 30_000);
+
+  test("a stalled worker can't finish a job once it's claimed again, even with the same attempt number", async () => {
+    // attempts start again after a replace or retry, so a worker that stalled could find its
+    // attempt number current again, under the same worker id. Claims never go down.
+    for (const via of ["replace", "retry"] as const) {
+      const clock = createTestClock("2026-04-01T00:00:00Z");
+      const type = unique(`fence-${via}`);
+      const releases = new Map<number, () => void>();
+      const results: string[] = [];
+      // Two instances with one worker id, as one process would be after it stalls and recovers.
+      const sameWorker = () => {
+        const worker = jobsOn(database.current, { clock, workerId: "w", lease: "30s" });
+        worker.define(type, {
+          maxAttempts: 1,
+          timeout: false,
+          run: (payload: { n: number }) =>
+            new Promise<string>((resolve) =>
+              releases.set(payload.n, () => {
+                results.push(`n${payload.n}`);
+                resolve(`n${payload.n}`);
+              }),
+            ),
+        });
+        return worker;
+      };
+      const stalled = sameWorker();
+      const producer = jobsOn(database.current, { clock });
+      const handle = producer.define(type, { maxAttempts: 1, run(_payload: { n: number }) {} });
+      const { id } = await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+      const stalledRun = stalled.runOnce({ budgetMs: 50 });
+      await waitUntil(() => releases.has(1));
+      clock.advance("31s");
+
+      if (via === "replace") {
+        await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true });
+      } else {
+        // The lease ran out on its only attempt: the next claim fails it, then it's retried.
+        expect(await producer.runOnce()).toMatchObject({ claimed: 1, failed: 1 });
+        expect(await producer.retry(id)).toBe(true);
+        await database.current.rows(
+          sql`update ${jobsTable} set payload = '{"n":2}' where id = ${id}::uuid`,
+        );
+      }
+      // Claimed again by worker "w": attempt 1, as the stalled run's was.
+      const recovered = sameWorker();
+      const recoveredRun = recovered.runOnce({ budgetMs: 50 });
+      await waitUntil(() => releases.has(2));
+      expect((await rowsOfType(type)).map((row) => [row.status, row.attempts])).toEqual([
+        ["running", 1],
+      ]);
+
+      // The stalled run finishes first. Before, its attempt number matched, and it completed
+      // the job with the old payload's result while the new run was still going.
+      releases.get(1)?.();
+      expect(await stalledRun).toMatchObject({ completed: 0 });
+      expect(stalled.logger.lines.map((line) => line.message)).toEqual([
+        expect.stringContaining("lost its lease"),
+      ]);
+      releases.get(2)?.();
+      expect(await recoveredRun).toMatchObject({ completed: 1 });
+      expect((await rowsOfType(type)).map((row) => [row.status, row.result])).toEqual([
+        ["completed", "n2"],
+      ]);
+    }
+  }, 30_000);
+
+  test("a jobs table without the claims column fails with a message that says to migrate", async () => {
+    await database.current.rows(sql`alter table ${altJobs} drop column claims`);
+    const jobs = createJobs({
+      db: database.current.db,
+      table: altJobs,
+      schedulesTable: altJobSchedules,
+      logger: recordingLogger(),
+    });
+    const handle = jobs.define(unique("unmigrated"), { run() {} });
+    await handle.enqueue(undefined);
+    const error = await jobs.runOnce().then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toMatchObject({ code: "invalid_config" });
+    expect(String((error as Error).message)).toMatch(
+      /^The jobs table is missing a column this version of groundwork uses \(.*claims.*\)\. Generate a migration with drizzle-kit and apply it: 0\.4\.0 added "claims"\.$/,
+    );
+  });
 
   test("a running job that gave up its key and then lost its worker never runs again", async () => {
     const clock = createTestClock("2026-04-01T00:00:00Z");

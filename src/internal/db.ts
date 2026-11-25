@@ -30,6 +30,21 @@ export function rowsOf<T>(result: unknown): T[] {
   throw new TypeError("Unexpected result from db.execute(): expected an array or { rows }.");
 }
 
+/** Postgres's error code, whether the driver or Drizzle wrapped it. */
+export function pgCode(error: unknown): string | undefined {
+  const own = (error as { code?: unknown })?.code;
+  if (typeof own === "string") return own;
+  const cause = (error as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof cause === "string" ? cause : undefined;
+}
+
+/** Postgres's own message, without the "Failed query: …" Drizzle wraps it in. */
+export function pgMessage(error: unknown): string {
+  const own = typeof (error as { code?: unknown })?.code === "string";
+  const source = own ? error : ((error as { cause?: unknown })?.cause ?? error);
+  return source instanceof Error ? source.message : String(source);
+}
+
 /** Reads a numeric column that a driver may return as a number, a string or a bigint. */
 export function toNumber(value: unknown): number {
   if (typeof value === "number") return value;

@@ -78,7 +78,7 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
 - `tx`: enqueue inside your transaction.
 - `runAt` / `delay`: not before a time, or not before `"10m"` from now.
 - `dedupeKey`: while a job of the same type and key is pending or running, enqueueing it again returns that job (`created: false`) instead of adding another, even under concurrent enqueues. Once the job finishes, the key is free again. For "only ever once" (one receipt per order, forever), record that in your own table, in the same transaction.
-- `replace: true` (with `dedupeKey`) debounces instead: the pending job with that key takes this call's payload, timing and priority, and keeps its id (`created: false`). Each change pushes the job back, so it runs once, after things settle:
+- `replace: true` (with `dedupeKey`) debounces instead: the pending job with that key takes this call's payload, timing, priority and `maxAttempts`, and keeps its id (`created: false`). Each change pushes the job back, so it runs once, after things settle:
 
   ```ts
   await sendDigest.enqueue({ userId }, { dedupeKey: `digest:${userId}`, delay: "5m", replace: true });
@@ -86,7 +86,7 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
 
   If the job with that key is already running, it keeps running but gives up the key, and this call enqueues a new job (`created: true`): the running one may have read its data already, so the latest change still gets a run. With several workers the two can overlap. The running job's current attempt becomes its last, so its out-of-date payload is never retried after the new one: if it fails, it fails for good, and `onExhausted` runs as usual. A running job whose worker has stopped (its lease ran out) is replaced like a pending one.
 
-  A replaced job keeps its attempt count, because attempt numbers fence workers. It gets this call's `maxAttempts` on top of the attempts it has used, so the new payload has as many tries as a new job. `context.attempt` and the backoff carry on from the attempts used, though: after one failed attempt, a replaced job's first retry waits the backoff's second step. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
+  A replaced job starts again from attempt 1, so `context.attempt`, the backoff and `retry(id)` treat the new payload as a new job. A running job that gave up its key has its attempts set to its `maxAttempts` (as graphile-worker does), so `retry(id)` still gives it its full `maxAttempts`. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
 
 ### Many at once
 
@@ -108,7 +108,7 @@ const results = await sendReceipt.enqueueMany(
 
 - **Claiming:** a worker claims up to `concurrency` jobs in one statement, using `FOR UPDATE SKIP LOCKED` (so workers never wait on each other), ordered by priority and due time through a partial index.
 - **Leases:** a claimed job is leased to its worker (`lease`, default `"1m"`), and the worker renews the lease while the handler runs. If the worker dies, the lease runs out and another worker picks the job up. There's no fixed "stale after 5 minutes" rule.
-- **Fencing:** each claim bumps the job's attempt number, and only the worker holding the latest attempt can complete or fail it. A worker that froze and wakes up late can't overwrite the result of the worker that took over. If its lease is lost, the handler's `signal` aborts.
+- **Fencing:** each claim bumps the job's `claims` count, and only the worker holding the latest claim can complete or fail it. A worker that froze and wakes up late can't overwrite the result of the worker that took over. `claims` never goes down, unlike `attempts`, which a replace or `retry` starts again, so this holds even when the attempt number comes round again. If its lease is lost, the handler's `signal` aborts.
 - **Failures** are retried with backoff until `maxAttempts`, then the job is marked `failed` and `onExhausted` runs. A job whose worker died during its last attempt also fails, rather than running again.
 - **At least once:** a worker can finish the work and die before recording it, and then the job runs again. Make handlers idempotent, for example with an idempotency key on the email provider, or by checking your own state first.
 

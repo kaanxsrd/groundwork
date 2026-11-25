@@ -20,8 +20,11 @@ export const JOB_STATUSES = ["pending", "running", "completed", "failed", "cance
  * - A job is claimable when `status` is pending or running and `run_at` has passed. While a job
  *   runs, `run_at` holds its lease expiry (as does `locked_until`), so a worker that dies leaves
  *   a job that becomes claimable again by itself, through the same index.
- * - `attempts` counts claims, and doubles as a fencing token: a worker can only finish a job if
- *   the attempt it claimed is still the latest.
+ * - `attempts` counts the tries of the current payload, up to `max_attempts`. A replace or a
+ *   retry starts it again.
+ * - `claims` counts every claim, and is the fencing token: a worker can only finish a job if its
+ *   claim is still the latest. It never goes down, so a worker that stalled can't match again
+ *   after a replace or retry resets `attempts`.
  * - `dedupe_key` is unique per type while a job is pending or running.
  *
  * Status is `text` with a check constraint rather than a Postgres enum, because an enum would
@@ -44,6 +47,7 @@ export function buildJobsTable<TSchema extends string | undefined>(factory: Tabl
       priority: integer("priority").notNull().default(0),
       attempts: integer("attempts").notNull().default(0),
       maxAttempts: integer("max_attempts").notNull().default(5),
+      claims: integer("claims").notNull().default(0),
       runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
       lockedUntil: timestamp("locked_until", { withTimezone: true }),
       lockedBy: text("locked_by"),
@@ -105,6 +109,7 @@ export const JOB_COLUMNS = [
   "priority",
   "attempts",
   "max_attempts",
+  "claims",
   "run_at",
   "locked_until",
   "locked_by",
