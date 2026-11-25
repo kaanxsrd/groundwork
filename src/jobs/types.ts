@@ -96,10 +96,11 @@ export interface EnqueueOptions {
   /** While a job of this type with this key is pending or running, enqueueing it again does nothing. */
   readonly dedupeKey?: string | undefined;
   /**
-   * With `dedupeKey`, to debounce: instead of keeping the pending job with this key, replace its
-   * payload, timing, priority and `maxAttempts` with this call's. If that job is already running,
-   * it finishes without the key, and this one is enqueued as a new job, so the latest payload
-   * always runs. `created` is `false` when a job was replaced.
+   * With `dedupeKey`, to debounce: instead of keeping the pending job with this key, give it this
+   * call's payload, timing and priority, and this call's `maxAttempts` on top of the attempts it
+   * has used. If that job is already running, it finishes without the key and isn't retried, and
+   * this one is enqueued as a new job, so the latest payload always runs. `created` is `false`
+   * when a job was replaced.
    */
   readonly replace?: boolean | undefined;
   /** Overrides the type's `maxAttempts`. */

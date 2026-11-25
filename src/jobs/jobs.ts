@@ -66,6 +66,8 @@ const MAX_ENQUEUE_MANY = 1_000;
 const PRUNE_BATCH = 5_000;
 const MAX_ERROR_LENGTH = 2_000;
 const MAX_BACKOFF_STEPS = 100;
+/** The largest `maxAttempts`: Postgres's `integer`, which `max_attempts` is. */
+const MAX_ATTEMPTS = 2_147_483_647;
 /** A schedule's tick may run this early at most (and never more than a tenth of `every`). */
 const SCHEDULE_EARLY_MAX_MS = 5_000;
 
@@ -173,6 +175,17 @@ function positiveInt(
 ): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) {
     throw new GroundworkError(code, `${label} must be a positive integer.`);
+  }
+  return value as number;
+}
+
+function attemptsLimit(
+  value: unknown,
+  label: string,
+  code: "invalid_config" | "invalid_argument",
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_ATTEMPTS) {
+    throw new GroundworkError(code, `${label} must be an integer from 1 to 2,147,483,647.`);
   }
   return value as number;
 }
@@ -304,7 +317,7 @@ export function createJobs(options: JobsOptions): Jobs {
       maxAttempts:
         definition.maxAttempts === undefined
           ? defaults.maxAttempts
-          : positiveInt(definition.maxAttempts, `maxAttempts of "${type}"`, "invalid_config"),
+          : attemptsLimit(definition.maxAttempts, `maxAttempts of "${type}"`, "invalid_config"),
       backoffBaseMs: parseDuration((backoff.base ?? defaults.base) as Duration, {
         label: `backoff.base of "${type}"`,
       }),
@@ -367,7 +380,7 @@ export function createJobs(options: JobsOptions): Jobs {
     const maxAttempts =
       enqueueOptions.maxAttempts === undefined
         ? handler.maxAttempts
-        : positiveInt(enqueueOptions.maxAttempts, "maxAttempts", "invalid_argument");
+        : attemptsLimit(enqueueOptions.maxAttempts, "maxAttempts", "invalid_argument");
     const dedupeKey = enqueueOptions.dedupeKey ?? null;
     if (
       dedupeKey !== null &&
@@ -422,44 +435,48 @@ export function createJobs(options: JobsOptions): Jobs {
       }
       return enqueueReplacing(handler, prepared, dedupeKey, runAt, target);
     }
-    const rows = rowsOf<{ id: string; created: boolean }>(
-      await target.execute(sql`
-        with input as materialized (select ${now()} as now),
-        inserted as (
-          insert into ${table} as j (type, payload, priority, max_attempts, run_at, dedupe_key, created_at, updated_at)
-          select ${handler.type}::text, ${jsonbParam(JSON.stringify(json))}, ${priority}::int, ${maxAttempts}::int,
-            ${runAt}, ${dedupeKey}::text, input.now, input.now
-          from input
-          on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
-          returning j.id::text as id
-        )
-        select id, true as created from inserted
-        union all
-        select j.id::text, false from ${table} j
-        where ${dedupeKey}::text is not null and j.type = ${handler.type}::text and j.dedupe_key = ${dedupeKey}::text
-          and j.status in ('pending', 'running') and not exists (select 1 from inserted)
-        limit 1`),
-    );
-    const row = rows[0];
-    if (row) return { id: row.id, created: row.created === true };
-    // The duplicate committed after this statement's snapshot was taken: look it up again,
-    // whatever its status now. It may have finished already; it's still the job this collided with.
-    const [existing] = rowsOf<{ id: string }>(
-      await target.execute(
-        sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text
-          order by (status in ('pending', 'running')) desc, created_at desc, id desc limit 1`,
-      ),
-    );
-    if (!existing)
-      throw new Error("enqueue found neither a new job nor the duplicate it collided with");
-    return { id: existing.id, created: false };
+    for (let round = 0; round < 3; round++) {
+      const rows = rowsOf<{ id: string; created: boolean }>(
+        await target.execute(sql`
+          with input as materialized (select ${now()} as now),
+          inserted as (
+            insert into ${table} as j (type, payload, priority, max_attempts, run_at, dedupe_key, created_at, updated_at)
+            select ${handler.type}::text, ${jsonbParam(JSON.stringify(json))}, ${priority}::int, ${maxAttempts}::int,
+              ${runAt}, ${dedupeKey}::text, input.now, input.now
+            from input
+            on conflict (type, dedupe_key) where dedupe_key is not null and status in ('pending', 'running') do nothing
+            returning j.id::text as id
+          )
+          select id, true as created from inserted
+          union all
+          select j.id::text, false from ${table} j
+          where ${dedupeKey}::text is not null and j.type = ${handler.type}::text and j.dedupe_key = ${dedupeKey}::text
+            and j.status in ('pending', 'running') and not exists (select 1 from inserted)
+          limit 1`),
+      );
+      const row = rows[0];
+      if (row) return { id: row.id, created: row.created === true };
+      // The duplicate committed after this statement's snapshot was taken: look it up again,
+      // whatever its status now. It may have finished already; it's still the job this collided with.
+      const [existing] = rowsOf<{ id: string }>(
+        await target.execute(
+          sql`select id::text as id from ${table} where type = ${handler.type}::text and dedupe_key = ${dedupeKey}::text
+            order by (status in ('pending', 'running')) desc, created_at desc, id desc limit 1`,
+        ),
+      );
+      if (existing) return { id: existing.id, created: false };
+      // No job has the key any more: a replace took it from the duplicate before enqueueing its
+      // own. The key is free, so try again.
+    }
+    throw new Error("enqueue found neither a new job nor the duplicate it collided with");
   }
 
   /**
    * `enqueue` with `replace`, to debounce, as graphile-worker's "replace" mode does:
    *
-   * - A pending job with the key gets this call's payload, timing, priority and maxAttempts. It
-   *   keeps its id and its attempt count, which only ever grows because it fences workers.
+   * - A pending job with the key gets this call's payload, timing and priority, and this call's
+   *   maxAttempts on top of the attempts it has used. It keeps its id and its attempt count, which
+   *   a replace never lowers because it fences workers.
    * - So does a running job whose lease ran out (its worker is gone): it goes back to pending,
    *   so the old worker can no longer finish it.
    * - A running job that's alive keeps running, but gives up the key, and a new job is enqueued.
@@ -484,9 +501,10 @@ export function createJobs(options: JobsOptions): Jobs {
           replaced as (
             update ${table} as j set payload = ${payload}, run_at = ${runAt},
               priority = ${job.priority}::int,
-              -- Attempts fence workers, so they only grow; the new payload gets its full budget
-              -- on top of the attempts used so far.
-              max_attempts = j.attempts + ${job.maxAttempts}::int, last_error = null,
+              -- Attempts fence workers, so a replace never lowers them; the new payload gets its
+              -- maxAttempts on top of the attempts used so far, up to the column's limit.
+              max_attempts = least(j.attempts::bigint + ${job.maxAttempts}::bigint, ${MAX_ATTEMPTS}::bigint)::int,
+              last_error = null,
               status = 'pending', locked_by = null, locked_until = null, updated_at = input.now
             from input
             where ${mine}
@@ -509,12 +527,12 @@ export function createJobs(options: JobsOptions): Jobs {
       if (row) return { id: row.id, created: row.created === true };
       // A live running job holds the key. It keeps running without it, and the loop enqueues
       // this one. Its current attempt becomes its last: its payload is out of date, so it must
-      // not be retried after (or alongside) the newer job. If the job finished or was replaced
-      // meanwhile, this changes nothing.
+      // not be retried after (or alongside) the newer job. If the job finished, was replaced or
+      // lost its lease meanwhile, this changes nothing, and the next round inserts or replaces.
       await target.execute(sql`
         update ${table} as j set dedupe_key = null, max_attempts = least(j.max_attempts, j.attempts),
           updated_at = ${now()}
-        where ${mine} and j.status = 'running'`);
+        where ${mine} and j.status = 'running' and j.locked_until > ${now()}`);
     }
     // Other callers kept taking the key between the two statements.
     throw new Error("enqueue with replace kept colliding with other enqueues of the same key");
@@ -592,11 +610,13 @@ export function createJobs(options: JobsOptions): Jobs {
     }));
 
     const target = manyOptions.tx ?? db;
-    const rows = rowsOf<{ kind: "inserted" | "existing"; id: string; dedupe_key: string | null }>(
-      await target.execute(sql`
+    type Batch = typeof records;
+    const insertBatch = async (batch: Batch) =>
+      rowsOf<{ kind: "inserted" | "existing"; id: string; dedupe_key: string | null }>(
+        await target.execute(sql`
         with input as materialized (select ${now()} as now),
         items as (
-          select * from jsonb_to_recordset(${jsonbParam(JSON.stringify(records))}) as t(
+          select * from jsonb_to_recordset(${jsonbParam(JSON.stringify(batch))}) as t(
             i int, id uuid, payload text, priority int, max_attempts int, run_at timestamptz,
             delay_ms float8, dedupe_key text)
         ),
@@ -626,45 +646,54 @@ export function createJobs(options: JobsOptions): Jobs {
         where j.type = ${handler.type}::text and j.status in ('pending', 'running')
           and j.dedupe_key in (select dedupe_key from items where dedupe_key is not null)
           and j.dedupe_key not in (select dedupe_key from inserted where dedupe_key is not null)`),
-    );
+      );
 
     const inserted = new Set<string>();
     const byKey = new Map<string, string>();
-    // A job this call created wins over anything else with its key.
-    for (const row of rows) {
-      if (row.kind !== "inserted") continue;
-      inserted.add(row.id);
-      if (row.dedupe_key !== null) byKey.set(row.dedupe_key, row.id);
-    }
-    for (const row of rows) {
-      if (row.kind === "existing" && row.dedupe_key !== null && !byKey.has(row.dedupe_key)) {
-        byKey.set(row.dedupe_key, row.id);
-      }
-    }
-    // A duplicate that committed after this statement's snapshot was taken: look those up again,
-    // whatever their status now. The duplicate may have finished already; it's still the job
-    // these calls collided with, and the rest of the batch is committed, so throwing would strand it.
-    const unknownKeys = [
-      ...new Set(
-        records.flatMap((record) =>
-          !inserted.has(record.id) && record.dedupe_key !== null && !byKey.has(record.dedupe_key)
-            ? [record.dedupe_key]
-            : [],
-        ),
-      ),
-    ];
-    if (unknownKeys.length > 0) {
-      const found = rowsOf<{ id: string; dedupe_key: string }>(
-        await target.execute(sql`
-          select distinct on (dedupe_key) id::text as id, dedupe_key from ${table}
-          where type = ${handler.type}::text
-            and dedupe_key in (${sql.join(
-              unknownKeys.map((key) => sql`${key}::text`),
-              sql`, `,
-            )})
-          order by dedupe_key, (status in ('pending', 'running')) desc, created_at desc, id desc`),
+    const unresolved = (batch: Batch) =>
+      batch.filter(
+        (record) =>
+          !inserted.has(record.id) && record.dedupe_key !== null && !byKey.has(record.dedupe_key),
       );
-      for (const row of found) byKey.set(row.dedupe_key, row.id);
+    // Every job goes in the first round. A later round only has keyed jobs whose duplicate
+    // vanished (see below), and stops once each has a job.
+    let batch: Batch = records;
+    for (let round = 0; round < 3 && batch.length > 0; round++) {
+      const rows = await insertBatch(batch);
+      // A job this call created wins over anything else with its key.
+      for (const row of rows) {
+        if (row.kind !== "inserted") continue;
+        inserted.add(row.id);
+        if (row.dedupe_key !== null) byKey.set(row.dedupe_key, row.id);
+      }
+      for (const row of rows) {
+        if (row.kind === "existing" && row.dedupe_key !== null && !byKey.has(row.dedupe_key)) {
+          byKey.set(row.dedupe_key, row.id);
+        }
+      }
+      // A duplicate that committed after this statement's snapshot was taken: look those up
+      // again, whatever their status now. The duplicate may have finished already; it's still the
+      // job these calls collided with, and the rest of the batch is committed, so throwing would
+      // strand it.
+      const unknownKeys = [
+        ...new Set(unresolved(batch).flatMap((record) => record.dedupe_key ?? [])),
+      ];
+      if (unknownKeys.length > 0) {
+        const found = rowsOf<{ id: string; dedupe_key: string }>(
+          await target.execute(sql`
+            select distinct on (dedupe_key) id::text as id, dedupe_key from ${table}
+            where type = ${handler.type}::text
+              and dedupe_key in (${sql.join(
+                unknownKeys.map((key) => sql`${key}::text`),
+                sql`, `,
+              )})
+            order by dedupe_key, (status in ('pending', 'running')) desc, created_at desc, id desc`),
+        );
+        for (const row of found) byKey.set(row.dedupe_key, row.id);
+      }
+      // A key no job has any more: a replace took it from the duplicate before enqueueing its
+      // own. The key is free, so those jobs go in again.
+      batch = unresolved(batch);
     }
 
     return records.map((record) => {

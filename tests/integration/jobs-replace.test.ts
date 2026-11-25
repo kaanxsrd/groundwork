@@ -1,6 +1,6 @@
 // enqueue({ dedupeKey, replace: true }): debouncing a job, as graphile-worker's "replace" mode.
 import { describe, expect, test } from "bun:test";
-import { sql } from "drizzle-orm";
+import { type SQLWrapper, sql } from "drizzle-orm";
 import { createJobs, type JobsOptions } from "../../src/jobs/index.ts";
 import { createTestClock } from "../../src/testing/index.ts";
 import { jobSchedules, jobs as jobsTable } from "../fixtures/schema.ts";
@@ -321,6 +321,79 @@ describe("enqueue with replace", () => {
     expect(row).toEqual({ max_attempts: 3, last_error: null });
     expect((await jobs.runOnce()).completed).toBe(1);
   });
+
+  test("maxAttempts goes up to Postgres's integer limit, also when a replace adds to it", async () => {
+    const type = unique("huge");
+    const jobs = jobsOn(database.current);
+    const handle = jobs.define(type, {
+      maxAttempts: 2_147_483_647,
+      backoff: { delays: ["1h"] },
+      run(payload: { n: number }) {
+        if (payload.n === 1) throw new Error("not yet");
+      },
+    });
+    await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    expect((await jobs.runOnce()).retried).toBe(1);
+    // One attempt used plus 2,147,483,647: before, this failed with "integer out of range".
+    expect(await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).toMatchObject({
+      created: false,
+    });
+    const [row] = await database.current.rows<{ max_attempts: number }>(
+      sql`select max_attempts from ${jobsTable} where type = ${type}`,
+    );
+    expect(row?.max_attempts).toBe(2_147_483_647);
+    // More than the column holds is refused up front, not by Postgres.
+    expect(() => jobs.define(unique("too-many"), { maxAttempts: 2_147_483_648, run() {} })).toThrow(
+      /maxAttempts of ".*" must be an integer from 1 to 2,147,483,647/,
+    );
+    await expect(handle.enqueue({ n: 3 }, { maxAttempts: 2_147_483_648 })).rejects.toThrow(
+      /^maxAttempts must be an integer from 1 to 2,147,483,647/,
+    );
+  });
+
+  test("a running job whose lease runs out during the replace is replaced in place", async () => {
+    const clock = createTestClock("2026-04-01T00:00:00Z");
+    const type = unique("expires-midway");
+    const releases: (() => void)[] = [];
+    const victim = jobsOn(database.current, { clock, workerId: "victim", lease: "30s" });
+    victim.define(type, {
+      timeout: false,
+      run: (payload: { n: number }) =>
+        payload.n === 1 ? new Promise<void>((resolve) => releases.push(resolve)) : undefined,
+    });
+    // Runs a hook after the next statement, before the call sends another.
+    let afterNext: (() => void) | undefined;
+    const real = database.current.db;
+    const db = {
+      async execute(query: SQLWrapper) {
+        const result = await real.execute(query);
+        const hook = afterNext;
+        afterNext = undefined;
+        hook?.();
+        return result;
+      },
+    };
+    const handle = jobsOn({ db: db as never }, { clock }).define(type, {
+      run(_payload: { n: number }) {},
+    });
+    const first = await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
+    const victimRun = victim.runOnce({ budgetMs: 50 });
+    await waitUntil(() => releases.length === 1);
+
+    // The first statement sees a live lease, and the lease runs out before the second. Before,
+    // the second took the key from the dead worker's job and cut its retries, so that job failed
+    // for good with its old payload when it was next claimed.
+    afterNext = () => clock.advance("31s");
+    expect(await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).toEqual({
+      id: first.id,
+      created: false,
+    });
+    expect(
+      (await rowsOfType(type)).map((row) => [row.status, row.payload, row.dedupe_key]),
+    ).toEqual([["pending", { n: 2 }, "k"]]);
+    for (const done of releases) done();
+    await victimRun;
+  }, 30_000);
 
   test("a running job that gave up its key isn't retried, so the newest payload runs last", async () => {
     const clock = createTestClock("2026-04-01T00:00:00Z");

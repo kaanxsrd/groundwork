@@ -357,6 +357,49 @@ describe("enqueueMany under concurrency", () => {
     expect(plain?.created).toBe(true);
   });
 
+  test("a duplicate whose key a replace takes between the two statements doesn't make it throw", async () => {
+    for (const many of [false, true]) {
+      const type = unique(many ? "taken-many" : "taken-one");
+      const real = database.current.db;
+      let afterFirst: (() => Promise<void>) | undefined;
+      const db = {
+        execute: async (query: SQLWrapper) => {
+          const result = await real.execute(query);
+          const hook = afterFirst;
+          afterFirst = undefined;
+          await hook?.();
+          return result;
+        },
+      };
+      const handle = jobsOn({ db: db as never }).define(type, { run(_payload: { n: number }) {} });
+      // Another enqueuer's job with the same key, not committed yet when the statement starts.
+      const other = await holdOpen<{ id: string }>(
+        sql`insert into ${jobsTable} (type, payload, dedupe_key) values (${type}, '{}', 'k') returning id::text as id`,
+      );
+      const otherId = other.rows[0]?.id;
+      // Before the job is looked up again, a worker claims it and a replace takes its key, as
+      // enqueue({ replace: true }) does from a running job, but hasn't enqueued its own job yet.
+      afterFirst = async () => {
+        await real.execute(sql`update ${jobsTable} set status = 'running', attempts = 1,
+          max_attempts = 1, locked_by = 'worker', locked_until = now() + interval '1 hour',
+          dedupe_key = null where id = ${otherId}::uuid`);
+      };
+      const pending = many
+        ? handle.enqueueMany([{ payload: { n: 1 }, dedupeKey: "k" }, { payload: { n: 2 } }])
+        : handle.enqueue({ n: 1 }, { dedupeKey: "k" }).then((result) => [result]);
+      await untilSomeoneWaitsForALock();
+      await other.commit();
+      // Before, this threw "found neither" (enqueueMany after enqueueing the rest). The key is
+      // free now, so the job is enqueued with it.
+      const results = await pending;
+      expect(results.map((result) => result?.created)).toEqual(many ? [true, true] : [true]);
+      const holders = await database.current.rows<{ id: string }>(
+        sql`select id::text as id from ${jobsTable} where type = ${type} and dedupe_key = 'k'`,
+      );
+      expect(holders).toEqual([{ id: results[0]?.id ?? "missing" }]);
+    }
+  });
+
   test("tx goes on the call, not on a job", async () => {
     const handle = jobsOn(database.current).define(unique("many-tx-item"), {
       run(_payload: { n: number }) {},

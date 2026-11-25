@@ -58,7 +58,7 @@ gw.jobs.define(type, { schema, run, maxAttempts, backoff, timeout, priority, onE
 | --- | --- | --- |
 | `schema` | none | A [Standard Schema](https://standardschema.dev). The payload is checked on enqueue, and again before running; `run` gets the schema's output. Without a schema, annotate `run`'s parameter to type `enqueue`. |
 | `run(payload, context)` | required | The handler. What it returns is stored as the job's `result`, which is handy for stats. |
-| `maxAttempts` | 5 | Tries before the job fails for good. |
+| `maxAttempts` | 5 | Tries before the job fails for good, up to 2,147,483,647. |
 | `backoff` | `{ base: "30s", max: "1h" }` | The wait before a retry is random between 0 and `min(max, base × 2^(attempt−1))` ("full jitter"), so failures don't retry in lockstep; `backoffDelayMs(attempt, baseMs, maxMs, random)` computes it, for showing the next retry in a UI. Or a fixed ladder, `{ delays: ["30s", "2m", "10m", "30m", "1h"] }`: after the n-th failure, wait the n-th delay exactly, and once the list runs out, repeat the last. |
 | `timeout` | `"5m"` | After this, `context.signal` aborts and the attempt counts as a failure. `false` for no timeout. |
 | `priority` | 0 | Higher runs first. |
@@ -78,7 +78,7 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
 - `tx`: enqueue inside your transaction.
 - `runAt` / `delay`: not before a time, or not before `"10m"` from now.
 - `dedupeKey`: while a job of the same type and key is pending or running, enqueueing it again returns that job (`created: false`) instead of adding another, even under concurrent enqueues. Once the job finishes, the key is free again. For "only ever once" (one receipt per order, forever), record that in your own table, in the same transaction.
-- `replace: true` (with `dedupeKey`) debounces instead: the pending job with that key takes this call's payload, timing, priority and `maxAttempts`, and keeps its id (`created: false`). Each change pushes the job back, so it runs once, after things settle:
+- `replace: true` (with `dedupeKey`) debounces instead: the pending job with that key takes this call's payload, timing and priority, and keeps its id (`created: false`). Each change pushes the job back, so it runs once, after things settle:
 
   ```ts
   await sendDigest.enqueue({ userId }, { dedupeKey: `digest:${userId}`, delay: "5m", replace: true });
@@ -86,7 +86,7 @@ await job.enqueue(payload, { tx, runAt, delay, priority, dedupeKey, maxAttempts 
 
   If the job with that key is already running, it keeps running but gives up the key, and this call enqueues a new job (`created: true`): the running one may have read its data already, so the latest change still gets a run. With several workers the two can overlap. The running job's current attempt becomes its last, so its out-of-date payload is never retried after the new one: if it fails, it fails for good, and `onExhausted` runs as usual. A running job whose worker has stopped (its lease ran out) is replaced like a pending one.
 
-  A replaced job keeps its attempt count, and gets this call's `maxAttempts` on top of the attempts it has used, so the new payload has its full budget. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
+  A replaced job keeps its attempt count, because attempt numbers fence workers. It gets this call's `maxAttempts` on top of the attempts it has used, so the new payload has as many tries as a new job. `context.attempt` and the backoff carry on from the attempts used, though: after one failed attempt, a replaced job's first retry waits the backoff's second step. This is graphile-worker's "replace" mode. `enqueueMany` doesn't take `replace`.
 
 ### Many at once
 
