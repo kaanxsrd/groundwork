@@ -5,7 +5,7 @@
 //   bun run db:up && bun run build && node scripts/example.mjs        # both
 //   node scripts/example.mjs example                                 # just examples/next-app
 //   node scripts/example.mjs quickstart                              # just the README quickstart
-//   node scripts/example.mjs generate     # rewrite examples/next-app/drizzle after a schema change
+//   node scripts/example.mjs generate <name>   # add a migration to examples/next-app/drizzle
 //   node scripts/example.mjs dev          # run examples/next-app with `next dev` on this checkout
 //
 // - example: copies examples/next-app, installs the tarball, checks its migrations are up to date,
@@ -31,6 +31,11 @@ const packageName = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
 const mode = process.argv[2] ?? "all";
 const modes = ["all", "example", "quickstart", "generate", "dev"];
 if (!modes.includes(mode)) throw new Error(`Usage: node scripts/example.mjs [${modes.join("|")}]`);
+// generate's migration name, such as jobs_claims.
+const migrationName = process.argv[3];
+if (mode === "generate" && !/^[a-z0-9_]+$/.test(migrationName ?? "")) {
+  throw new Error("Usage: node scripts/example.mjs generate <name>, such as jobs_claims");
+}
 const maintenanceUrl =
   process.env.TEST_DATABASE_URL || "postgres://groundwork:groundwork@127.0.0.1:54330/groundwork";
 const work = mkdtempSync(join(tmpdir(), "groundwork-example-"));
@@ -266,12 +271,17 @@ async function quickstart() {
   await cleanup();
 }
 
+// Adds a migration after the ones already there, as an app would after upgrading groundwork, so
+// a database that ran the earlier ones can still be migrated.
 async function generate() {
   const app = join(work, "next-app");
   await installExample(app);
   await step("drizzle-kit generate", () => {
-    rmSync(join(app, "drizzle"), { recursive: true, force: true });
-    console.log(run("npx drizzle-kit generate --name init", app, { DATABASE_URL: maintenanceUrl }));
+    console.log(
+      run(`npx drizzle-kit generate --name ${migrationName}`, app, {
+        DATABASE_URL: maintenanceUrl,
+      }),
+    );
     rmSync(join(exampleDir, "drizzle"), { recursive: true, force: true });
     cpSync(join(app, "drizzle"), join(exampleDir, "drizzle"), { recursive: true });
   });
