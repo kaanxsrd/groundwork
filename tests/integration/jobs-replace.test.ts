@@ -39,11 +39,17 @@ function byPayload(rows: Row[]): Row[] {
   return [...rows].sort((a, b) => n(a) - n(b));
 }
 
+// JSON as text, as groundwork reads it: a client's column transform would rename its keys.
 async function rowsOfType(type: string): Promise<Row[]> {
-  return database.current.rows<Row>(sql`
-    select id::text as id, status, payload, dedupe_key, attempts, max_attempts, claims, result,
-      (extract(epoch from run_at) * 1000)::float8 as run_at_ms
+  const rows = await database.current.rows<Row & { payload: string; result: string | null }>(sql`
+    select id::text as id, status, payload::text as payload, dedupe_key, attempts, max_attempts,
+      claims, result::text as result, (extract(epoch from run_at) * 1000)::float8 as run_at_ms
     from ${jobsTable} where type = ${type} order by created_at, id`);
+  return rows.map((row) => ({
+    ...row,
+    payload: JSON.parse(row.payload),
+    result: row.result === null ? null : JSON.parse(row.result),
+  }));
 }
 
 async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 20_000) {

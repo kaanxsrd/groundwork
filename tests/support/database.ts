@@ -10,6 +10,8 @@
 //
 // TEST_DATABASE_URL points at the maintenance database (default: the docker compose one).
 // GW_TEST_DRIVER picks the driver the tests use: postgres-js (default) or node-postgres.
+// GW_TEST_TRANSFORM gives the postgres-js client one of its built-in column transforms (camel,
+// pascal or kebab), as an app's own client might have.
 
 import { afterAll, beforeAll } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
@@ -22,6 +24,7 @@ import { drizzle as drizzlePostgresJs } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import pg from "pg";
 import postgres from "postgres";
+import { rowsOf } from "../../src/internal/db.ts";
 
 export const DEFAULT_TEST_DATABASE_URL =
   "postgres://groundwork:groundwork@127.0.0.1:54330/groundwork";
@@ -65,6 +68,20 @@ export function testDriver(): TestDriver {
     throw new Error(`GW_TEST_DRIVER must be postgres-js or node-postgres, not ${value}`);
   }
   return value;
+}
+
+const TRANSFORMS = ["camel", "pascal", "kebab"] as const;
+type TestTransform = (typeof TRANSFORMS)[number];
+
+function testTransform(driver: TestDriver): TestTransform | undefined {
+  const value = process.env.GW_TEST_TRANSFORM;
+  if (!value) return undefined;
+  if (!TRANSFORMS.includes(value as TestTransform)) {
+    throw new Error(`GW_TEST_TRANSFORM must be one of ${TRANSFORMS.join(", ")}, not ${value}`);
+  }
+  if (driver !== "postgres-js")
+    throw new Error("GW_TEST_TRANSFORM needs GW_TEST_DRIVER=postgres-js");
+  return value as TestTransform;
 }
 
 function maintenanceUrl(): string {
@@ -172,7 +189,12 @@ async function ensureTemplate(admin: postgres.Sql): Promise<string> {
 /** Opens a pool to any URL with the given driver, for example one that points at nothing. */
 export function openConnection(url: string, driver: TestDriver, max: number): TestConnection {
   if (driver === "postgres-js") {
-    const client = postgres(url, { ...quiet(), max });
+    const transform = testTransform(driver);
+    const client = postgres(url, {
+      ...quiet(),
+      max,
+      ...(transform ? { transform: postgres[transform] } : {}),
+    });
     return {
       db: drizzlePostgresJs({ client }),
       driver,
@@ -183,14 +205,6 @@ export function openConnection(url: string, driver: TestDriver, max: number): Te
   // An idle client that errors (for example when the database is dropped) must not crash the run.
   pool.on("error", () => {});
   return { db: drizzleNodePg({ client: pool }), driver, close: () => pool.end() };
-}
-
-/** Normalises `db.execute()` results: postgres-js returns an array, node-postgres `{ rows }`. */
-function toRows<T>(result: unknown): T[] {
-  if (Array.isArray(result)) return result as T[];
-  const rows = (result as { rows?: unknown }).rows;
-  if (Array.isArray(rows)) return rows as T[];
-  throw new Error("Unexpected db.execute() result shape");
 }
 
 /** Creates a fresh database for one test file. Prefer {@link useTestDatabase} inside tests. */
@@ -222,7 +236,8 @@ export async function createTestDatabase(
       return connection;
     },
     rows: async <T extends Record<string, unknown>>(query: SQL) =>
-      toRows<T>(await main.db.execute(query)),
+      // groundwork's own normaliser, so tests read rows the way groundwork does, transforms included.
+      rowsOf<T>(await main.db.execute(query)),
     close: async () => {
       if (closed) return;
       closed = true;

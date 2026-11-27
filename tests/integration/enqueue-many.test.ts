@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type SQLWrapper, sql } from "drizzle-orm";
 import { z } from "zod";
+import { rowsOf } from "../../src/internal/db.ts";
 import { isGroundworkError } from "../../src/internal/errors.ts";
 import { createJobs, type JobsOptions } from "../../src/jobs/index.ts";
 import { createTestClock } from "../../src/testing/index.ts";
@@ -41,11 +42,13 @@ interface Row extends Record<string, unknown> {
   dedupe_key: string | null;
 }
 
+// payload as text, as groundwork reads it: a client's column transform would rename its keys.
 async function rowsOfType(type: string): Promise<Row[]> {
-  return database.current.rows<Row>(sql`
-    select id::text as id, payload, priority, max_attempts,
+  const rows = await database.current.rows<Row & { payload: string }>(sql`
+    select id::text as id, payload::text as payload, priority, max_attempts,
       (extract(epoch from run_at) * 1000)::float8 as run_at_ms, dedupe_key
     from ${jobsTable} where type = ${type} order by created_at, payload->>'n'`);
+  return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) }));
 }
 
 async function thrown(fn: () => Promise<unknown>): Promise<unknown> {
@@ -88,8 +91,7 @@ async function holdOpen<T>(statement: ReturnType<typeof sql>) {
   const done = deferred();
   const ran = Promise.withResolvers<T[]>();
   const transaction = connection.db.transaction(async (tx) => {
-    const result = (await tx.execute(statement)) as unknown as T[] | { rows: T[] };
-    ran.resolve(Array.isArray(result) ? result : result.rows);
+    ran.resolve(rowsOf<T>(await tx.execute(statement)));
     await done.promise;
   });
   const rows = await ran.promise;

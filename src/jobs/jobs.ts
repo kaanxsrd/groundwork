@@ -1352,7 +1352,7 @@ export function createJobs(options: JobsOptions): Jobs {
         type: string;
         pending: unknown;
         running: unknown;
-        failed_24h: unknown;
+        failed_last_day: unknown;
         oldest_pending_age_ms: unknown;
         last_success: unknown;
       }>(
@@ -1361,7 +1361,7 @@ export function createJobs(options: JobsOptions): Jobs {
           select j.type,
             count(*) filter (where j.status = 'pending')::int as pending,
             count(*) filter (where j.status = 'running')::int as running,
-            count(*) filter (where j.status = 'failed' and j.completed_at > input.now - interval '24 hours')::int as failed_24h,
+            count(*) filter (where j.status = 'failed' and j.completed_at > input.now - interval '24 hours')::int as failed_last_day,
             ${sql.raw(ms("input.now"))} - ${sql.raw(ms("min(j.run_at) filter (where j.status = 'pending' and j.run_at <= input.now)"))} as oldest_pending_age_ms,
             ${sql.raw(ms("max(j.completed_at) filter (where j.status = 'completed')"))} as last_success
           from ${table} j, input
@@ -1377,7 +1377,7 @@ export function createJobs(options: JobsOptions): Jobs {
           type,
           pending: number(row?.pending),
           running: number(row?.running),
-          failedLast24h: number(row?.failed_24h),
+          failedLast24h: number(row?.failed_last_day),
           oldestPendingAgeMs:
             row?.oldest_pending_age_ms === null || row?.oldest_pending_age_ms === undefined
               ? null

@@ -20,14 +20,42 @@ export function jsonbParam(json: string | null): SQL {
   return sql`${json}::text::jsonb`;
 }
 
-/** Normalises `db.execute()` results: postgres-js returns an array, node-postgres `{ rows }`. */
+/**
+ * Normalises `db.execute()` results: postgres-js returns an array, node-postgres `{ rows }`.
+ *
+ * It also undoes postgres-js's built-in column transforms (`postgres.camel`, `postgres.pascal`,
+ * `postgres.kebab`), which an app may have set on its client: `used_at` comes back as `usedAt`,
+ * `UsedAt` or `used-at`. Every column groundwork reads is lower snake_case with no underscore
+ * before a digit, so the transforms can be reversed exactly. They also rename keys inside `json`
+ * and `jsonb` values, which is why groundwork returns JSON as text.
+ */
 export function rowsOf<T>(result: unknown): T[] {
-  if (Array.isArray(result)) return result as T[];
+  const rows = rawRows(result);
+  const first = rows[0];
+  if (first === undefined || !Object.keys(first as object).some(isTransformed)) return rows as T[];
+  return rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row as object)) out[snakeCase(key)] = value;
+    return out as T;
+  });
+}
+
+function rawRows(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
   if (result !== null && typeof result === "object") {
     const rows = (result as { rows?: unknown }).rows;
-    if (Array.isArray(rows)) return rows as T[];
+    if (Array.isArray(rows)) return rows;
   }
   throw new TypeError("Unexpected result from db.execute(): expected an array or { rows }.");
+}
+
+const isTransformed = (key: string) => /[A-Z-]/.test(key);
+
+/** `usedAt`, `UsedAt` and `used-at` all become `used_at`. */
+function snakeCase(key: string): string {
+  return key
+    .replaceAll("-", "_")
+    .replace(/[A-Z]/g, (letter, index: number) => (index === 0 ? "" : "_") + letter.toLowerCase());
 }
 
 /** Postgres's error code, whether the driver or Drizzle wrapped it. */

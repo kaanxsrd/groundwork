@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { eq, or, sql } from "drizzle-orm";
 import { type AuditEvent, createAuditLog, diff, REDACTED } from "../../src/audit/index.ts";
 import { createGroundwork } from "../../src/index.ts";
+import { rowsOf } from "../../src/internal/db.ts";
 import { createTestClock } from "../../src/testing/index.ts";
 import { altAuditLog, auditLog } from "../fixtures/schema.ts";
 import { createTestDatabase, type TestDatabase, useTestDatabase } from "../support/database.ts";
@@ -122,7 +123,7 @@ describe("record", () => {
       const result = await tx.execute(
         sql`select (select occurred_at from ${auditLog} where id = ${entry.id}) = now() as same`,
       );
-      return (Array.isArray(result) ? result : (result as { rows: unknown[] }).rows)[0];
+      return rowsOf(result)[0];
     });
     expect(same).toEqual({ same: true });
     expect(await audit.count({ requestId })).toBe(1);

@@ -38,18 +38,23 @@ jobs:
           fi
 
   integration:
-    # Oldest and newest supported Postgres majors, each with both drivers.
-    name: Integration (Postgres ${{ matrix.postgres }}, ${{ matrix.driver }})
+    # Oldest and newest supported Postgres majors, each with both drivers. Once more with a
+    # postgres-js client that renames every result column (postgres.pascal), as an app's might.
+    name: Integration (Postgres ${{ matrix.postgres }}, ${{ matrix.driver }}${{ matrix.transform && format(', postgres.{0}', matrix.transform) || '' }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         postgres: ["16", "18"]
         driver: [postgres-js, node-postgres]
+        transform: [""]
+        include:
+          - { postgres: "18", driver: postgres-js, transform: pascal }
     env:
       # The same docker-compose.yml as local development, so CI and laptops run the same server.
       POSTGRES_VERSION: ${{ matrix.postgres }}
       GW_TEST_DRIVER: ${{ matrix.driver }}
+      GW_TEST_TRANSFORM: ${{ matrix.transform }}
       TEST_DATABASE_URL: postgres://groundwork:groundwork@127.0.0.1:54330/groundwork
       TEST_REDIS_URL: redis://127.0.0.1:63790
     steps:
