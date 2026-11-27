@@ -1,20 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { isGroundworkError } from "../../src/internal/errors.ts";
-import {
-  createRateLimiter,
-  memoryStore,
-  type RateLimitStore,
-  type RuleOptions,
-} from "../../src/rate-limit/index.ts";
+import { createRateLimiter, memoryStore, type RuleOptions } from "../../src/rate-limit/index.ts";
 import { STORE_RETRY_MS } from "../../src/rate-limit/limiter.ts";
+import { memoryStoreImplementation } from "../../src/rate-limit/memory-store.ts";
+import { opaque, type Store } from "../../src/rate-limit/types.ts";
 import { createTestClock } from "../../src/testing/index.ts";
 import { recordingLogger, T0, TEST_SECRET } from "../support/rate-limit-conformance.ts";
 
 /** A store that works, fails or hangs on command, and counts calls. */
 function controllableStore(clock: ReturnType<typeof createTestClock>) {
-  const inner = memoryStore({ clock });
+  const inner = memoryStoreImplementation({ clock });
   const state = { mode: "ok" as "ok" | "fail" | "hang", calls: 0, resets: 0 };
-  const store: RateLimitStore = {
+  const fake: Store = {
     kind: "fake",
     consume(input) {
       state.calls++;
@@ -33,7 +30,7 @@ function controllableStore(clock: ReturnType<typeof createTestClock>) {
     },
     cleanup: async () => 7,
   };
-  return { store, state };
+  return { store: opaque(fake), state };
 }
 
 function setup(

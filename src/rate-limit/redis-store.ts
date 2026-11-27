@@ -1,7 +1,13 @@
 import { toNumber } from "../internal/db.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { capacityOf, EPSILON } from "./policy.ts";
-import type { ConsumeInput, RateLimitStore, StoreState } from "./types.ts";
+import {
+  type ConsumeInput,
+  opaque,
+  type RateLimitStore,
+  type Store,
+  type StoreState,
+} from "./types.ts";
 
 /**
  * The one Redis capability the store needs: running a Lua script. Adapt your client in one line:
@@ -58,6 +64,13 @@ if level + cost > capacity + epsilon then
   end
   return {"0", tostring(now)}
 end
+-- A peek writes nothing, so it can't start a window or restart an expired one.
+if cost == 0 then
+  if used then
+    return {"1", tostring(now), tostring(used), tostring(updated), tostring(expires)}
+  end
+  return {"1", tostring(now)}
+end
 local newUsed = level + cost
 local newExpires
 if fixed then
@@ -89,7 +102,7 @@ function parseReply(reply: unknown): StoreState {
 }
 
 /** Counters in Redis, for apps that already run it. Postgres stays the default. */
-export function redisStore(options: RedisStoreOptions): RateLimitStore & { kind: "redis" } {
+export function redisStore(options: RedisStoreOptions): RateLimitStore {
   const { client } = options;
   if (!client || typeof client.eval !== "function") {
     throw new GroundworkError(
@@ -102,7 +115,7 @@ export function redisStore(options: RedisStoreOptions): RateLimitStore & { kind:
     throw new GroundworkError("invalid_config", "redisStore prefix must be a string.");
   }
 
-  return {
+  const store: Store = {
     kind: "redis",
     async consume(input: ConsumeInput) {
       const { policy } = input;
@@ -127,4 +140,5 @@ export function redisStore(options: RedisStoreOptions): RateLimitStore & { kind:
     // Redis expires keys itself.
     cleanup: async () => 0,
   };
+  return opaque(store);
 }

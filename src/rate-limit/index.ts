@@ -18,10 +18,8 @@ export { type MemoryStore, type MemoryStoreOptions, memoryStore } from "./memory
 export { type RedisEvalClient, type RedisStoreOptions, redisStore } from "./redis-store.ts";
 export type {
   CheckOptions,
-  ConsumeInput,
   FixedWindowRuleOptions,
   OnError,
-  Policy,
   RateLimitAlgorithm,
   RateLimiter,
   RateLimitResult,
@@ -29,6 +27,5 @@ export type {
   RateLimitStore,
   ResetOptions,
   RuleOptions,
-  StoreState,
   TokenBucketRuleOptions,
 } from "./types.ts";

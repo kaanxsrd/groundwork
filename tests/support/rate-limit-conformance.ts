@@ -149,6 +149,28 @@ export function rateLimitConformance(label: string, makeLimiter: () => LimiterFa
       expect(await check(subject, { cost: 0 })).toMatchObject({ allowed: true, remaining: 0 });
     });
 
+    test("cost 0 doesn't start a window, or restart an expired one", async () => {
+      const h = setup(makeLimiter());
+      const { check } = h.rule({ name: unique("fw"), limit: 2, window: "10s" });
+      const subject = unique("ip");
+      // Had this peek started a window at 0s, the checks at 9s would use it up, and the window
+      // ending at 10s would let the third check in.
+      expect(await check(subject, { cost: 0 })).toMatchObject({ allowed: true, remaining: 2 });
+      h.clock.set(T0 + 9_000);
+      await check(subject);
+      await check(subject);
+      h.clock.set(T0 + 10_000);
+      expect(await check(subject)).toMatchObject({ allowed: false, retryAfterMs: 9_000 });
+
+      // After the window ends, a peek reports a full window without starting one.
+      h.clock.set(T0 + 30_000);
+      const peek = await check(subject, { cost: 0 });
+      expect(peek).toMatchObject({ allowed: true, remaining: 2 });
+      expect(peek.resetAt).toEqual(at(40_000));
+      h.clock.set(T0 + 35_000);
+      expect((await check(subject)).resetAt).toEqual(at(45_000));
+    });
+
     test("reset forgets a subject", async () => {
       const h = setup(makeLimiter());
       const { rule, check } = h.rule({ name: unique("fw"), limit: 1, window: "1h" });

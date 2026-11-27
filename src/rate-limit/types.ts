@@ -102,7 +102,7 @@ export interface RateLimiter {
   cleanup(): Promise<number>;
 }
 
-/** A rule in normalised form, as stores see it. */
+/** A rule in normalised form, as stores see it. Internal. */
 export type Policy =
   | { readonly algorithm: "fixed-window"; readonly limit: number; readonly windowMs: number }
   | {
@@ -114,6 +114,7 @@ export type Policy =
       readonly ratePerMs: number;
     };
 
+/** Internal. */
 export interface ConsumeInput {
   /** HMAC of the algorithm, rule name and subject. Never the raw subject. */
   readonly key: string;
@@ -124,7 +125,7 @@ export interface ConsumeInput {
   readonly now: number | null;
 }
 
-/** What a store reports after `consume`. Times are epoch milliseconds. */
+/** What a store reports after `consume`. Times are epoch milliseconds. Internal. */
 export interface StoreState {
   readonly allowed: boolean;
   /** The time the store used for this decision. */
@@ -138,14 +139,33 @@ export interface StoreState {
 }
 
 /**
- * Where counters live. `postgresStore` (the default when you pass `db` and `table`) and
- * `redisStore` ship with groundwork. The interface may still change before 1.0.
+ * How a store works inside groundwork: the Postgres store (the default), `redisStore()` and
+ * `memoryStore()`. Internal, so it can change in a minor release, when a new algorithm needs
+ * more from stores, say.
  */
-export interface RateLimitStore {
+export interface Store {
   readonly kind: string;
-  /** Atomically uses `cost` if it fits. Must never use anything when it doesn't. */
+  /** Atomically uses `cost` if it fits, and never uses anything when it doesn't. `0` writes nothing. */
   consume(input: ConsumeInput): Promise<StoreState>;
   reset(key: string, options?: ResetOptions): Promise<void>;
   /** Deletes rows that expired before `now` (or the store's own time). */
   cleanup(now: number | null): Promise<number>;
 }
+
+declare const OPAQUE: unique symbol;
+
+/**
+ * Where a limiter keeps its counters instead of Postgres: `redisStore()`, or `memoryStore()` for
+ * tests and single-instance apps. Its members are internal, so a store can only come from
+ * groundwork, and how stores work can change without a breaking release.
+ */
+export interface RateLimitStore {
+  readonly [OPAQUE]: true;
+}
+
+/** The store behind a `RateLimitStore`. Internal. */
+export const storeOf = (store: RateLimitStore): Store => store as unknown as Store;
+
+/** A store as the opaque public type. Internal. */
+export const opaque = <T extends Store>(store: T): RateLimitStore & Omit<T, keyof Store> =>
+  store as unknown as RateLimitStore & Omit<T, keyof Store>;

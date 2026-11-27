@@ -5,7 +5,7 @@ import { type Duration, MAX_TIMER_MS, parseDuration } from "../internal/duration
 import { GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import type { RateLimitsTable } from "../schema/rate-limits.ts";
-import { memoryStore } from "./memory-store.ts";
+import { memoryStoreImplementation } from "./memory-store.ts";
 import {
   capacityOf,
   type NormalizedRule,
@@ -17,16 +17,18 @@ import {
   validateSubject,
 } from "./policy.ts";
 import { postgresStore } from "./postgres-store.ts";
-import type {
-  CheckOptions,
-  OnError,
-  RateLimiter,
-  RateLimitResult,
-  RateLimitRule,
-  RateLimitStore,
-  ResetOptions,
-  RuleOptions,
-  StoreState,
+import {
+  type CheckOptions,
+  type OnError,
+  type RateLimiter,
+  type RateLimitResult,
+  type RateLimitRule,
+  type RateLimitStore,
+  type ResetOptions,
+  type RuleOptions,
+  type Store,
+  type StoreState,
+  storeOf,
 } from "./types.ts";
 
 /** After the store fails, skip it for this long before trying again. */
@@ -125,12 +127,12 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   const logger = options.logger ?? consoleLogger;
   const once = createOnceLogger(logger);
 
-  let store: RateLimitStore;
+  let store: Store;
   if (options.store !== undefined) {
     if (options.db !== undefined || options.table !== undefined) {
       throw new GroundworkError("invalid_config", "Pass either store, or db and table, not both.");
     }
-    store = options.store;
+    store = storeOf(options.store);
   } else {
     if (options.db === undefined || options.table === undefined) {
       throw new GroundworkError(
@@ -140,7 +142,10 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
     }
     store = postgresStore({ db: options.db, table: options.table });
   }
-  const memory = memoryStore({ maxKeys: options.memory?.maxKeys, clock: fallbackClock });
+  const memory = memoryStoreImplementation({
+    maxKeys: options.memory?.maxKeys,
+    clock: fallbackClock,
+  });
 
   // Circuit breaker: while the store is known to be down, don't wait on it for every request.
   let storeDownUntil = 0;

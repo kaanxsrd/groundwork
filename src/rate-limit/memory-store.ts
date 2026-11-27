@@ -1,7 +1,13 @@
 import { type Clock, systemClock } from "../internal/clock.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { capacityOf, fits, levelAt } from "./policy.ts";
-import type { ConsumeInput, RateLimitStore, StoreState } from "./types.ts";
+import {
+  type ConsumeInput,
+  opaque,
+  type RateLimitStore,
+  type Store,
+  type StoreState,
+} from "./types.ts";
 
 export interface MemoryStoreOptions {
   /**
@@ -20,7 +26,6 @@ interface Entry {
 }
 
 export interface MemoryStore extends RateLimitStore {
-  readonly kind: "memory";
   /** How many subjects are held right now. */
   readonly size: number;
 }
@@ -31,6 +36,13 @@ export interface MemoryStore extends RateLimitStore {
  * limiter does) as the fallback while the real store is down.
  */
 export function memoryStore(options: MemoryStoreOptions = {}): MemoryStore {
+  return opaque(memoryStoreImplementation(options));
+}
+
+/** The memory store with its internal members, for the limiter's own fallback. Internal. */
+export function memoryStoreImplementation(
+  options: MemoryStoreOptions = {},
+): Store & { readonly kind: "memory"; readonly size: number } {
   const maxKeys = options.maxKeys ?? 10_000;
   if (!Number.isSafeInteger(maxKeys) || maxKeys < 1) {
     throw new GroundworkError("invalid_config", "memory.maxKeys must be a positive integer.");
@@ -56,6 +68,8 @@ export function memoryStore(options: MemoryStoreOptions = {}): MemoryStore {
       }
       return { allowed: false, now, row: existing ? { ...existing } : null };
     }
+    // A peek writes nothing, so it can't start a window or restart an expired one.
+    if (cost === 0) return { allowed: true, now, row: existing ? { ...existing } : null };
 
     let entry: Entry;
     if (policy.algorithm === "fixed-window") {
@@ -80,7 +94,7 @@ export function memoryStore(options: MemoryStoreOptions = {}): MemoryStore {
   }
 
   return {
-    kind: "memory",
+    kind: "memory" as const,
     get size() {
       return entries.size;
     },

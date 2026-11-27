@@ -4,7 +4,7 @@ import { GroundworkError } from "../internal/errors.ts";
 import { assertTableColumns } from "../internal/table.ts";
 import { RATE_LIMIT_COLUMNS, type RateLimitsTable } from "../schema/rate-limits.ts";
 import { EPSILON } from "./policy.ts";
-import type { ConsumeInput, RateLimitStore, ResetOptions, StoreState } from "./types.ts";
+import type { ConsumeInput, ResetOptions, Store, StoreState } from "./types.ts";
 
 export interface PostgresStoreOptions {
   readonly db: GroundworkDatabase;
@@ -40,6 +40,14 @@ const nowParam = (now: number | null): SQL =>
  */
 function consumeQuery(table: RateLimitsTable, input: ConsumeInput): SQL {
   const { policy, key, rule, cost } = input;
+  // A peek writes nothing, so it can't start a window or restart an expired one.
+  if (cost === 0) {
+    return sql`
+      with input as materialized (select ${nowParam(input.now)} as now)
+      select true as allowed, existing.used, ${ms(sql`existing.updated_at`)} as updated_at,
+        ${ms(sql`existing.expires_at`)} as expires_at, ${ms(sql`input.now`)} as now
+      from input left join ${table} existing on existing.key = ${key}::text`;
+  }
   const capacity = policy.algorithm === "fixed-window" ? policy.limit : policy.burst;
 
   let insertExpires: SQL;
@@ -93,9 +101,7 @@ function consumeQuery(table: RateLimitsTable, input: ConsumeInput): SQL {
 }
 
 /** The default store: counters in your Postgres, in the table from `groundworkTables()`. */
-export function postgresStore(
-  options: PostgresStoreOptions,
-): RateLimitStore & { kind: "postgres" } {
+export function postgresStore(options: PostgresStoreOptions): Store & { kind: "postgres" } {
   const { db, table } = options;
   if (!db || typeof db.execute !== "function") {
     throw new GroundworkError("invalid_config", "db must be a Drizzle Postgres database.");
@@ -108,7 +114,9 @@ export function postgresStore(
       const [row] = rowsOf<ConsumeRow>(await db.execute(consumeQuery(table, input)));
       if (!row) throw new Error("rate-limit query returned no row");
       const now = toNumber(row.now);
-      if (row.used === null || row.used === undefined) return { allowed: false, now, row: null };
+      if (row.used === null || row.used === undefined) {
+        return { allowed: row.allowed === true, now, row: null };
+      }
       return {
         allowed: row.allowed === true,
         now,
