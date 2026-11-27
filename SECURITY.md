@@ -24,4 +24,4 @@ Out of scope: denial of service through sheer volume against an app that uses gr
 
 ## Supported versions
 
-Before 1.0, security fixes go into the latest release only.
+Security fixes go into the latest release. Within a major version, upgrading never breaks the documented API ([docs/releasing.md](docs/releasing.md#versions)), so the latest release is always one you can move to.

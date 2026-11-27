@@ -182,10 +182,10 @@ clock.advance("15m");
 ## Resetting and cleaning up
 
 ```ts
-await loginLimit.reset(ip); // after a successful login, say
+await loginLimit.reset(ipSubject(ip)); // after a successful login: the same subject check() used
 ```
 
-With the Postgres store, `reset` can join your transaction: `reset(ip, { tx })`.
+With the Postgres store, `reset` can join your transaction: `reset(ipSubject(ip), { tx })`.
 
 Checks don't take a transaction, on purpose. A failed login usually rolls back, and its attempt must still count. A check inside a long transaction would also hold the counter's row lock until that transaction ends.
 
@@ -195,7 +195,7 @@ Expired rows are harmless (an expired row counts as empty), but they take space.
 const deleted = await gw.rateLimit.cleanup();
 ```
 
-It deletes in batches and skips rows other checks are using. When the jobs module lands, it will schedule this for you.
+It deletes in batches and skips rows other checks are using. With the jobs module set up, `createGroundwork` schedules it every hour as `groundwork.rate-limit-cleanup`.
 
 ## What's stored, and what isn't
 

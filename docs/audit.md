@@ -183,7 +183,7 @@ Offsets don't have the guarantees above: while the log grows, an entry can show 
 const deleted = await gw.audit.prune({ olderThan: "365d" });
 ```
 
-This is the only way groundwork ever removes entries. It deletes in batches of 5,000. Run it from a scheduled job; once the jobs module lands, it can do the scheduling.
+This is the only way groundwork ever removes entries. It deletes in batches of 5,000. Run it from a scheduled job, such as `gw.jobs.schedule("audit.prune", { every: "1d" }, () => gw.audit.prune({ olderThan: "365d" }))`.
 
 ## Making the table tamper-resistant
 

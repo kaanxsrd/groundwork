@@ -116,10 +116,15 @@ try {
 
 | Code | Meaning |
 | --- | --- |
-| `invalid_config` | Options passed when creating a module are wrong. Thrown at startup, never per request. |
+| `invalid_config` | The setup is wrong: options passed when creating a module, a module used without its table or options, a secret function that returns a bad secret, or a table that needs a migration. Most are thrown at startup. The ones only a request can find, such as a lazy secret or a missing column, are thrown by the first call that finds them. |
 | `invalid_argument` | A value passed to a method is wrong, such as a malformed duration. |
+| `conflict` | The call kept losing a race with concurrent calls, after retrying. Try it again. Only `enqueue(…, { replace: true })` throws it today. |
 
-Modules add codes as they land. `isGroundworkError()` works even if two copies of groundwork end up in your dependency tree, where `instanceof` would not. Error messages never contain secrets, API keys or rate-limit subjects.
+New codes may come in a minor release, so keep a default branch when you switch on `code`. `isGroundworkError()` works even if two copies of groundwork end up in your dependency tree, where `instanceof` would not. Error messages never contain secrets, API keys or rate-limit subjects.
+
+Any other error thrown from groundwork is either your database's (a lost connection, say) or a bug in groundwork; please [report](https://github.com/kaanxsrd/groundwork/issues) the second kind.
+
+Strings Postgres can't store don't throw. `text` refuses `\u0000`, and `jsonb` also refuses a lone surrogate (half of an emoji, which `.slice()` can leave). In audit entries, job payloads and results, and API-key names, metadata and reasons, each is stored as U+FFFD (�). A job's `dedupeKey` is an identity, not text, so one with either is refused with `invalid_argument`.
 
 Expected outcomes are not errors: a denied rate-limit check or a rejected API key comes back as a result value, not a throw.
 

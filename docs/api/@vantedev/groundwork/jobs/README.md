@@ -796,7 +796,7 @@ Runs a failed or cancelled job again from attempt 1.
 
 > **runOnce**(`options?`): `Promise`\<[`RunSummary`](#runsummary)\>
 
-Runs due jobs and schedules until none are left or `budgetMs` runs out. For cron and HTTP triggers.
+Runs due jobs and schedules until none are left or `budget` runs out. For cron and HTTP triggers.
 
 ###### Parameters
 
@@ -975,11 +975,11 @@ How long the oldest due job has been waiting, or `null` if none is due.
 
 #### Properties
 
-##### budgetMs?
+##### budget?
 
-> `readonly` `optional` **budgetMs?**: `number`
+> `readonly` `optional` **budget?**: `` `${number}ms` `` \| `` `${number}s` `` \| `` `${number}m` `` \| `` `${number}h` `` \| `` `${number}d` `` \| `` `${number}w` ``
 
-Stop claiming new jobs after this many milliseconds. Jobs already running finish. Defaults to 10,000.
+Stop claiming new jobs after this long, such as `"50s"`. Jobs already running finish. Defaults to `"10s"`.
 
 ##### concurrency?
 
@@ -1271,38 +1271,6 @@ last delay repeats. `["30s", "2m", "10m", "30m", "1h"]` retries after 30 seconds
 > **JobStatus** = `"pending"` \| `"running"` \| `"completed"` \| `"failed"` \| `"cancelled"`
 
 ## Functions
-
-### backoffDelayMs()
-
-> **backoffDelayMs**(`attempt`, `baseMs`, `maxMs`, `random`): `number`
-
-Exponential backoff with full jitter (AWS's "full jitter"): a random wait between 0 and
-`min(maxMs, baseMs * 2^(attempt - 1))`. Spreading retries out keeps a burst of failures from
-retrying in lockstep.
-
-#### Parameters
-
-##### attempt
-
-`number`
-
-##### baseMs
-
-`number`
-
-##### maxMs
-
-`number`
-
-##### random
-
-() => `number`
-
-#### Returns
-
-`number`
-
-***
 
 ### createJobs()
 

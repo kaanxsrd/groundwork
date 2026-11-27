@@ -48,11 +48,23 @@ git tag v0.2.0
 git push && git push origin v0.2.0
 ```
 
+For a new major, also point `examples/next-app/package.json` at it (`^2.0.0`) in the version commit. CI installs the example from the packed tarball, so it can't see a stale range, but anyone running `npm install` in the example would.
+
+The workflow refuses to publish when the tag and version differ, when changesets are left over, when the example's range is stale, or while `drizzle-orm` or `drizzle-kit` in `package.json` is a prerelease. CI can pass on a Drizzle release candidate, but users get Drizzle from npm's `latest` tag.
+
 Approve the run under **Actions → Release**. Then check the package page and that `npm view @vantedev/groundwork version` shows the new version.
 
-## Choosing the version
+## Versions
 
-Until 1.0, a minor version (0.2.0) can break the API, and a patch (0.1.1) never does. Say what breaks in the changeset, and how to update.
+Since 1.0, groundwork follows semver:
+
+- **Major** (2.0.0) for anything that breaks an app built on the documented API: removing or renaming an export, option, method or field; a type change that makes code which compiled stop compiling; a new default, or a change to behaviour the docs promise; and a stored format that changes (the key format, how secrets are derived, a migration that does more than add). A Drizzle major is a groundwork major too, because the table types are tied to it.
+- **Minor** (1.1.0) for additions: exports, options, methods and fields; a migration that only adds, such as a column with a default; and new members of the unions that are open, so code that switches on them needs a default branch. The open unions are `GroundworkErrorCode`, `VerifyFailureReason`, `ApiKeyEventType` (and `ApiKeyEvent`'s types), `RateLimitAlgorithm` and `JobStatus`.
+- **Patch** (1.0.1) for fixes that keep the documented behaviour. A fix may change behaviour that was never documented and was wrong.
+
+What apps pass on to their own clients is covered as well: the API-key failure codes in `auth.response` (`missing`, `forbidden_scope`, `rate_limited`…), idempotency's `idempotency_key_*` codes, and the rate-limit headers. What isn't covered: anything not exported from a subpath in `package.json`'s `exports`, a `RateLimitStore`'s members, log messages, and error messages (branch on `code`).
+
+Pick the bump in each changeset. For a major, say what breaks and how to update.
 
 ## Fixing mistakes
 

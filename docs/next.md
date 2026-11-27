@@ -77,7 +77,7 @@ export const POST = withApiKey(
 
 Order matters. Put `withApiKey` outside, so nothing runs for a bad key. Put `withRateLimit` outside `withIdempotency` if replays should count against the limit, as they do above, or inside it if they shouldn't.
 
-## `jobsRoute(gw, { secret, budgetMs, concurrency })`
+## `jobsRoute(gw, { secret, budget, concurrency })`
 
 An HTTP trigger for `gw.jobs.runOnce()`, for serverless hosts where nothing runs `gw.jobs.work()`:
 
@@ -89,14 +89,16 @@ import { gw } from "@/lib/groundwork";
 import "@/lib/jobs"; // a worker only runs the job types it knows
 
 export const maxDuration = 60;
-export const GET = jobsRoute(gw, { secret: env.CRON_SECRET, budgetMs: 50_000 });
+export const GET = jobsRoute(gw, { secret: () => env.CRON_SECRET, budget: "50s" });
 export const POST = GET;
 ```
 
 - Callers must send `Authorization: Bearer <secret>`. The secret must be at least 16 characters. On Vercel, name it `CRON_SECRET` and [Vercel Cron](https://vercel.com/docs/cron-jobs) sends it. The comparison is timing-safe.
+- A string secret is checked when the route is created, and so during `next build`. A function, as above, is called on the first request instead, so the build doesn't need the variable.
+- `budget` (default `"10s"`) and `concurrency` (default 4) are checked when the route is created, so a typo fails the build instead of every cron call.
 - It answers with the run's summary: `{ claimed, completed, retried, failed, scheduled, durationMs }`.
 - `?schedule=<name>` makes that schedule due first, like VaultDrop's `?job=`.
-- Keep `budgetMs` under the route's `maxDuration`, leaving time for running jobs to finish.
+- Keep `budget` under the route's `maxDuration`, leaving time for running jobs to finish.
 
 ## `getClientIp(request, { trustProxy })`
 
@@ -115,5 +117,5 @@ Ports are dropped and IPv6 is normalised, so `[2001:DB8::1]:443` becomes `2001:d
 ## Next.js 16 notes
 
 - With Cache Components (on in new apps), a `GET` handler that reads nothing from the request is prerendered at build. `withApiKey`, `withRateLimit`, `withIdempotency` and `jobsRoute` all read the request, so they always run at request time. For a `GET` route that doesn't, call `await connection()` from `next/server` first.
-- Route modules are loaded at build, so `createGroundwork` and `jobsRoute` check their secrets during `next build`. Set the environment for the build too (`.env.local` does this locally).
+- Route modules are loaded at build. A secret passed as a string to `createGroundwork` or `jobsRoute` is checked then, so set the environment for the build too (`.env.local` does this locally). Pass a function instead, `secret: () => env.GROUNDWORK_SECRET`, to check it on first use.
 - groundwork needs the Node.js runtime, the default for route handlers. The edge runtime isn't supported, and `proxy.ts` isn't tested.

@@ -17,7 +17,7 @@ npx drizzle-kit generate   # writes the migration; read it
 npx drizzle-kit migrate    # or apply it however you apply migrations today
 ```
 
-**Only the tables you export are created.** Destructure just the ones for the modules you use. As more modules land, `groundworkTables()` returns more tables, but nothing changes in your database until you export them.
+**Only the tables you export are created.** Destructure just the ones for the modules you use. If a later release adds a module, `groundworkTables()` returns one more table, but nothing changes in your database until you export them.
 
 **After upgrading groundwork, run `npx drizzle-kit generate` again.** A release can add a column to a table you export (0.4.0 added `claims` to `gw_jobs`), and its changelog entry says so. Apply the migration before you deploy the new version: groundwork's statements use the new column straight away.
 

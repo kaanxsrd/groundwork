@@ -92,7 +92,9 @@ Checks run in this order. The first failure wins:
 | `rate_limited` | 429 | Over the key's rate limit. |
 | `quota_exceeded` | 429 | Over the key's daily quota. |
 
-On failure the result has `reason`, `status`, `message`, `headers`, the `key` when one was found, `prefix` (the presented key's `vnt_3f9ca0c44a15`, when it parsed: log it for failed attempts, never the key), and a ready `response`:
+The reasons are part of the stable API, since apps hand them to their own clients as the `code` in `response`. New ones may come in a minor release, so keep a default branch when you switch on `reason`.
+
+On failure the result has `reason`, `status`, `message`, `headers`, the `key` when one was found, `prefix` (the presented key's `vnt_3f9ca0c44a15`, when it parsed: log it for failed attempts, never the key), `missingScopes` (empty unless the reason is `forbidden_scope`), `rateLimit` and `quota` (`null` unless that check denied the request), and a ready `response`:
 
 ```json
 { "error": { "code": "forbidden_scope", "message": "This API key does not have the scopes this request needs.", "missingScopes": ["posts:write"] } }
@@ -143,6 +145,8 @@ import { apiKeyAuditEvent, createApiKeys } from "@vantedev/groundwork/api-keys";
 
 createApiKeys({ …, onEvent: (event) => audit.record(apiKeyAuditEvent(event), { tx: event.tx }) });
 ```
+
+`onEvent` gets every change, after it's made and in the same transaction when there is one. Each event has `type`, `key` (after the change), `actor` and `tx`. Switch on `type` for the rest: an `update` has `before`, a `rotate` has `grace`, and a `revoke` or `suspend` has `reason` (`string | null`). New types may come in a minor release, so keep a `default` branch.
 
 ## Security notes
 

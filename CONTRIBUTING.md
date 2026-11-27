@@ -83,7 +83,7 @@ Every user-visible change needs a changeset:
 bun run changeset
 ```
 
-Pick the bump (`minor` for features until 1.0) and describe the change for users. Changesets turns these into the version bump and `CHANGELOG.md` at release time. [docs/releasing.md](docs/releasing.md) covers the release itself.
+Pick the bump (`patch` for a fix, `minor` for a feature, `major` only for a breaking change; see [docs/releasing.md](docs/releasing.md#versions)) and describe the change for users. Changesets turns these into the version bump and `CHANGELOG.md` at release time. [docs/releasing.md](docs/releasing.md) covers the release itself.
 
 ## Build
 

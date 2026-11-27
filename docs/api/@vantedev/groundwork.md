@@ -320,11 +320,14 @@ A logger whose methods take the context first, as pino's and bunyan's do.
 
 ### Groundwork
 
+The instance `createGroundwork()` returns. Its type parameters come from the options: audit
+actions, audit entity types and API-key scopes. A bare `Groundwork` accepts any instance.
+
 #### Type Parameters
 
 ##### TAuditAction
 
-`TAuditAction` *extends* `string` = `never`
+`TAuditAction` *extends* `string` = `string`
 
 ##### TAuditEntity
 
@@ -332,7 +335,7 @@ A logger whose methods take the context first, as pino's and bunyan's do.
 
 ##### TScope
 
-`TScope` *extends* `string` = `never`
+`TScope` *extends* `string` = `string`
 
 #### Properties
 
@@ -756,12 +759,16 @@ Units accepted in a [Duration](#duration). Months and years are left out because
 
 ### GroundworkErrorCode
 
-> **GroundworkErrorCode** = `"invalid_config"` \| `"invalid_argument"`
+> **GroundworkErrorCode** = `"invalid_config"` \| `"invalid_argument"` \| `"conflict"`
 
-Machine-readable reason for a [GroundworkError](#groundworkerror).
+Machine-readable reason for a [GroundworkError](#groundworkerror). More codes may be added in a minor
+release, so keep a default branch when you switch on it.
 
-- `invalid_config`: options passed when creating a module are wrong. Thrown at startup.
+- `invalid_config`: the setup is wrong: options passed when creating a module, a module used
+  without its table or options, a secret function that returns a bad secret, or a table that
+  needs a migration. Mostly thrown at startup; the ones only a request can find, on that request.
 - `invalid_argument`: a value passed to a method is wrong (for example a malformed duration).
+- `conflict`: the call kept losing a race with concurrent calls, after retrying. Try it again.
 
 ***
 

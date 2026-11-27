@@ -71,11 +71,11 @@ The second argument Next.js passes a route handler. Use your route's own type fo
 
 #### Properties
 
-##### budgetMs?
+##### budget?
 
-> `readonly` `optional` **budgetMs?**: `number`
+> `readonly` `optional` **budget?**: `` `${number}ms` `` \| `` `${number}s` `` \| `` `${number}m` `` \| `` `${number}h` `` \| `` `${number}d` `` \| `` `${number}w` ``
 
-Stop claiming new jobs after this long, then wait for running ones. Defaults to 10,000 ms.
+Stop claiming new jobs after this long, then wait for running ones. Defaults to `"10s"`.
 
 ##### concurrency?
 
@@ -85,10 +85,13 @@ Jobs run at once. Defaults to 4.
 
 ##### secret
 
-> `readonly` **secret**: `string`
+> `readonly` **secret**: `string` \| (() => `string`)
 
 The bearer token callers must send (`Authorization: Bearer <secret>`), at least 16
 characters. On Vercel, name it `CRON_SECRET` and Vercel Cron sends it for you.
+
+A string is checked when the route is created. A function is called on the first request,
+so `next build` works without the variable: `secret: () => process.env.CRON_SECRET ?? ""`.
 
 ***
 
@@ -498,7 +501,7 @@ runs `gw.jobs.work()`. Export it as both GET (what Vercel Cron sends) and POST:
 // app/api/jobs/route.ts
 import "@/lib/jobs"; // the file that defines your jobs and schedules
 export const maxDuration = 60;
-export const GET = jobsRoute(gw, { secret: env.CRON_SECRET });
+export const GET = jobsRoute(gw, { secret: () => env.CRON_SECRET, budget: "50s" });
 export const POST = GET;
 ```
 

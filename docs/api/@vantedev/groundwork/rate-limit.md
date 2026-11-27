@@ -27,36 +27,6 @@ rejected without using anything, so one oversized request never burns the rest o
 
 ***
 
-### ConsumeInput
-
-#### Properties
-
-##### cost
-
-> `readonly` **cost**: `number`
-
-##### key
-
-> `readonly` **key**: `string`
-
-HMAC of the algorithm, rule name and subject. Never the raw subject.
-
-##### now
-
-> `readonly` **now**: `number` \| `null`
-
-Epoch milliseconds from the injected clock, or `null` to use the store's own time.
-
-##### policy
-
-> `readonly` **policy**: [`Policy`](#policy-1)
-
-##### rule
-
-> `readonly` **rule**: `string`
-
-***
-
 ### FixedWindowRuleOptions
 
 At most `limit` cost per `window`. The window starts at a subject's first request.
@@ -132,8 +102,9 @@ addresses inside it. 128 limits each address on its own.
 
 ### MemoryStore
 
-Where counters live. `postgresStore` (the default when you pass `db` and `table`) and
-`redisStore` ship with groundwork. The interface may still change before 1.0.
+Where a limiter keeps its counters instead of Postgres: `redisStore()`, or `memoryStore()` for
+tests and single-instance apps. Its members are internal, so a store can only come from
+groundwork, and how stores work can change without a breaking release.
 
 #### Extends
 
@@ -141,83 +112,19 @@ Where counters live. `postgresStore` (the default when you pass `db` and `table`
 
 #### Properties
 
-##### kind
+##### \[OPAQUE\]
 
-> `readonly` **kind**: `"memory"`
+> `readonly` **\[OPAQUE\]**: `true`
 
-###### Overrides
+###### Inherited from
 
-[`RateLimitStore`](#ratelimitstore).[`kind`](#kind-1)
+[`RateLimitStore`](#ratelimitstore).[`[OPAQUE]`](#opaque-1)
 
 ##### size
 
 > `readonly` **size**: `number`
 
 How many subjects are held right now.
-
-#### Methods
-
-##### cleanup()
-
-> **cleanup**(`now`): `Promise`\<`number`\>
-
-Deletes rows that expired before `now` (or the store's own time).
-
-###### Parameters
-
-###### now
-
-`number` \| `null`
-
-###### Returns
-
-`Promise`\<`number`\>
-
-###### Inherited from
-
-[`RateLimitStore`](#ratelimitstore).[`cleanup`](#cleanup-2)
-
-##### consume()
-
-> **consume**(`input`): `Promise`\<[`StoreState`](#storestate)\>
-
-Atomically uses `cost` if it fits. Must never use anything when it doesn't.
-
-###### Parameters
-
-###### input
-
-[`ConsumeInput`](#consumeinput)
-
-###### Returns
-
-`Promise`\<[`StoreState`](#storestate)\>
-
-###### Inherited from
-
-[`RateLimitStore`](#ratelimitstore).[`consume`](#consume-1)
-
-##### reset()
-
-> **reset**(`key`, `options?`): `Promise`\<`void`\>
-
-###### Parameters
-
-###### key
-
-`string`
-
-###### options?
-
-[`ResetOptions`](#resetoptions)
-
-###### Returns
-
-`Promise`\<`void`\>
-
-###### Inherited from
-
-[`RateLimitStore`](#ratelimitstore).[`reset`](#reset-2)
 
 ***
 
@@ -378,8 +285,9 @@ Forgets `subject`'s usage, for example after a successful login.
 
 ### RateLimitStore
 
-Where counters live. `postgresStore` (the default when you pass `db` and `table`) and
-`redisStore` ship with groundwork. The interface may still change before 1.0.
+Where a limiter keeps its counters instead of Postgres: `redisStore()`, or `memoryStore()` for
+tests and single-instance apps. Its members are internal, so a store can only come from
+groundwork, and how stores work can change without a breaking release.
 
 #### Extended by
 
@@ -387,61 +295,9 @@ Where counters live. `postgresStore` (the default when you pass `db` and `table`
 
 #### Properties
 
-##### kind
+##### \[OPAQUE\]
 
-> `readonly` **kind**: `string`
-
-#### Methods
-
-##### cleanup()
-
-> **cleanup**(`now`): `Promise`\<`number`\>
-
-Deletes rows that expired before `now` (or the store's own time).
-
-###### Parameters
-
-###### now
-
-`number` \| `null`
-
-###### Returns
-
-`Promise`\<`number`\>
-
-##### consume()
-
-> **consume**(`input`): `Promise`\<[`StoreState`](#storestate)\>
-
-Atomically uses `cost` if it fits. Must never use anything when it doesn't.
-
-###### Parameters
-
-###### input
-
-[`ConsumeInput`](#consumeinput)
-
-###### Returns
-
-`Promise`\<[`StoreState`](#storestate)\>
-
-##### reset()
-
-> **reset**(`key`, `options?`): `Promise`\<`void`\>
-
-###### Parameters
-
-###### key
-
-`string`
-
-###### options?
-
-[`ResetOptions`](#resetoptions)
-
-###### Returns
-
-`Promise`\<`void`\>
+> `readonly` **\[OPAQUE\]**: `true`
 
 ***
 
@@ -507,30 +363,6 @@ Prepended to every Redis key. Defaults to `"gw:rl:"`.
 > `readonly` `optional` **tx?**: [`GroundworkDatabase`](../groundwork.md#groundworkdatabase)
 
 Run the reset inside this transaction (Postgres store only).
-
-***
-
-### StoreState
-
-What a store reports after `consume`. Times are epoch milliseconds.
-
-#### Properties
-
-##### allowed
-
-> `readonly` **allowed**: `boolean`
-
-##### now
-
-> `readonly` **now**: `number`
-
-The time the store used for this decision.
-
-##### row
-
-> `readonly` **row**: \{ `expiresAt`: `number`; `updatedAt`: `number`; `used`: `number`; \} \| `null`
-
-The stored row, after the update when allowed, or `null` if there is none.
 
 ***
 
@@ -605,48 +437,6 @@ What a rule does when its store (Postgres or Redis) fails or times out:
 - `"memory"`: count in this process's memory until the store is back. Limits hold per instance.
 - `"allow"`: let every request through (fail open).
 - `"deny"`: reject every request (fail closed).
-
-***
-
-### Policy
-
-> **Policy** = \{ `algorithm`: `"fixed-window"`; `limit`: `number`; `windowMs`: `number`; \} \| \{ `algorithm`: `"token-bucket"`; `burst`: `number`; `perMs`: `number`; `rate`: `number`; `ratePerMs`: `number`; \}
-
-A rule in normalised form, as stores see it.
-
-#### Union Members
-
-##### Type Literal
-
-\{ `algorithm`: `"fixed-window"`; `limit`: `number`; `windowMs`: `number`; \}
-
-***
-
-##### Type Literal
-
-\{ `algorithm`: `"token-bucket"`; `burst`: `number`; `perMs`: `number`; `rate`: `number`; `ratePerMs`: `number`; \}
-
-###### algorithm
-
-> `readonly` **algorithm**: `"token-bucket"`
-
-###### burst
-
-> `readonly` **burst**: `number`
-
-###### perMs
-
-> `readonly` **perMs**: `number`
-
-###### rate
-
-> `readonly` **rate**: `number`
-
-###### ratePerMs
-
-> `readonly` **ratePerMs**: `number`
-
-Tokens added per millisecond.
 
 ***
 
@@ -784,7 +574,7 @@ limiter does) as the fallback while the real store is down.
 
 ### redisStore()
 
-> **redisStore**(`options`): [`RateLimitStore`](#ratelimitstore) & `object`
+> **redisStore**(`options`): [`RateLimitStore`](#ratelimitstore)
 
 Counters in Redis, for apps that already run it. Postgres stays the default.
 
@@ -796,4 +586,4 @@ Counters in Redis, for apps that already run it. Postgres stays the default.
 
 #### Returns
 
-[`RateLimitStore`](#ratelimitstore) & `object`
+[`RateLimitStore`](#ratelimitstore)

@@ -19,54 +19,6 @@ if (!auth.ok) return auth.response;
 
 ## Interfaces
 
-### ApiKeyEvent
-
-Passed to `onEvent` after every change to a key.
-
-#### Type Parameters
-
-##### TScope
-
-`TScope` *extends* `string` = `string`
-
-#### Properties
-
-##### actor
-
-> `readonly` **actor**: [`AuditActor`](audit.md#auditactor)
-
-##### before?
-
-> `readonly` `optional` **before?**: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\>
-
-For `update`: the key before the change.
-
-##### grace?
-
-> `readonly` `optional` **grace?**: `` `${number}ms` `` \| `` `${number}s` `` \| `` `${number}m` `` \| `` `${number}h` `` \| `` `${number}d` `` \| `` `${number}w` ``
-
-For `rotate`: how long the old key keeps working.
-
-##### key
-
-> `readonly` **key**: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\>
-
-##### reason?
-
-> `readonly` `optional` **reason?**: `string` \| `null`
-
-##### tx?
-
-> `readonly` `optional` **tx?**: [`GroundworkDatabase`](../groundwork.md#groundworkdatabase)
-
-The transaction the change ran in, if any. Record related writes in it.
-
-##### type
-
-> `readonly` **type**: [`ApiKeyEventType`](#apikeyeventtype-1)
-
-***
-
 ### ApiKeyFilter
 
 #### Properties
@@ -806,6 +758,22 @@ Scopes the request needs. All of them must be granted (exactly or by `resource:*
 
 ***
 
+### ApiKeyEvent
+
+> **ApiKeyEvent**\<`TScope`\> = `ApiKeyEventBase`\<`TScope`\> & `object` \| `ApiKeyEventBase`\<`TScope`\> & `object` \| `ApiKeyEventBase`\<`TScope`\> & `object` \| `ApiKeyEventBase`\<`TScope`\> & `object`
+
+Passed to `onEvent` after every change to a key. Switch on `type` to read what that change
+carries: `before` for an update, `grace` for a rotation, `reason` for a revocation or
+suspension. New types may be added in a minor release, so keep a `default` branch.
+
+#### Type Parameters
+
+##### TScope
+
+`TScope` *extends* `string` = `string`
+
+***
+
 ### ApiKeyEventType
 
 > **ApiKeyEventType** = `"create"` \| `"update"` \| `"rotate"` \| `"revoke"` \| `"suspend"` \| `"reinstate"` \| `"delete"`
@@ -872,7 +840,7 @@ What a key can be granted: a declared scope, or a wildcard over one resource.
 
 ### VerifyResult
 
-> **VerifyResult**\<`TScope`\> = \{ `headers`: `Readonly`\<`Record`\<`string`, `string`\>\>; `key`: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\>; `ok`: `true`; `quota`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; `rateLimit`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; \} \| \{ `headers`: `Readonly`\<`Record`\<`string`, `string`\>\>; `key`: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\> \| `null`; `message`: `string`; `missingScopes?`: readonly `TScope`[]; `ok`: `false`; `prefix`: `string` \| `null`; `quota?`: [`RateLimitResult`](rate-limit.md#ratelimitresult); `rateLimit?`: [`RateLimitResult`](rate-limit.md#ratelimitresult); `reason`: [`VerifyFailureReason`](#verifyfailurereason); `response`: `Response`; `status`: `401` \| `403` \| `429`; \}
+> **VerifyResult**\<`TScope`\> = \{ `headers`: `Readonly`\<`Record`\<`string`, `string`\>\>; `key`: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\>; `ok`: `true`; `quota`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; `rateLimit`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; \} \| \{ `headers`: `Readonly`\<`Record`\<`string`, `string`\>\>; `key`: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\> \| `null`; `message`: `string`; `missingScopes`: readonly `TScope`[]; `ok`: `false`; `prefix`: `string` \| `null`; `quota`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; `rateLimit`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; `reason`: [`VerifyFailureReason`](#verifyfailurereason); `response`: `Response`; `status`: `401` \| `403` \| `429`; \}
 
 #### Type Parameters
 
@@ -916,7 +884,7 @@ The per-key limit's check (limit, remaining, reset), or `null` when the key has 
 
 ##### Type Literal
 
-\{ `headers`: `Readonly`\<`Record`\<`string`, `string`\>\>; `key`: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\> \| `null`; `message`: `string`; `missingScopes?`: readonly `TScope`[]; `ok`: `false`; `prefix`: `string` \| `null`; `quota?`: [`RateLimitResult`](rate-limit.md#ratelimitresult); `rateLimit?`: [`RateLimitResult`](rate-limit.md#ratelimitresult); `reason`: [`VerifyFailureReason`](#verifyfailurereason); `response`: `Response`; `status`: `401` \| `403` \| `429`; \}
+\{ `headers`: `Readonly`\<`Record`\<`string`, `string`\>\>; `key`: [`ApiKeyRecord`](#apikeyrecord)\<`TScope`\> \| `null`; `message`: `string`; `missingScopes`: readonly `TScope`[]; `ok`: `false`; `prefix`: `string` \| `null`; `quota`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; `rateLimit`: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`; `reason`: [`VerifyFailureReason`](#verifyfailurereason); `response`: `Response`; `status`: `401` \| `403` \| `429`; \}
 
 ###### headers
 
@@ -932,11 +900,11 @@ The key, when it was found (revoked, expired, suspended, or denied by its policy
 
 > `readonly` **message**: `string`
 
-###### missingScopes?
+###### missingScopes
 
-> `readonly` `optional` **missingScopes?**: readonly `TScope`[]
+> `readonly` **missingScopes**: readonly `TScope`[]
 
-For `forbidden_scope`: what was missing.
+For `forbidden_scope`: what was missing. Empty for every other reason.
 
 ###### ok
 
@@ -948,17 +916,17 @@ For `forbidden_scope`: what was missing.
 
 The presented key's prefix (`vnt_3f9ca0c44a15`) when it parsed, for logging failed attempts.
 
-###### quota?
+###### quota
 
-> `readonly` `optional` **quota?**: [`RateLimitResult`](rate-limit.md#ratelimitresult)
+> `readonly` **quota**: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`
 
-For `quota_exceeded`: the daily quota's check.
+For `quota_exceeded`: the daily quota's check. Otherwise `null`.
 
-###### rateLimit?
+###### rateLimit
 
-> `readonly` `optional` **rateLimit?**: [`RateLimitResult`](rate-limit.md#ratelimitresult)
+> `readonly` **rateLimit**: [`RateLimitResult`](rate-limit.md#ratelimitresult) \| `null`
 
-For `rate_limited` and `quota_exceeded`: the per-key limit's check.
+For `rate_limited` and `quota_exceeded`: the per-key limit's check. Otherwise `null`.
 
 ###### reason
 

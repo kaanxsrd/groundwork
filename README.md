@@ -33,7 +33,7 @@
 <br>
 
 > [!NOTE]
-> **0.x:** the API can still change before 1.0. Each change is in the [changelog](CHANGELOG.md), with what to update.
+> **Stable since 1.0:** groundwork follows semver. A minor release adds features, a patch fixes bugs, and only a major changes the API. What counts as a breaking change is in [docs/releasing.md](docs/releasing.md#versions). Each release is in the [changelog](CHANGELOG.md).
 
 ## Why
 
@@ -72,7 +72,7 @@ Keys that secret scanners recognise, stored as HMACs. Rotation with a grace peri
     <td width="50%" valign="top">
 
 **[Background jobs](docs/jobs.md)**<br>
-Typed jobs enqueued in your transaction, one at a time or a thousand in one statement, and claimed in batches. Leases bring back a crashed worker's jobs, retries back off with jitter, a dedupe key can debounce, and schedules run each tick exactly once.
+Typed jobs enqueued in your transaction, one at a time or a thousand in one statement, and claimed in batches. Leases bring back a crashed worker's jobs, retries back off with jitter, a dedupe key can debounce, and each schedule tick is claimed once.
 
 </td>
   </tr>
@@ -187,7 +187,7 @@ export const POST = withApiKey(
 import { jobsRoute } from "@vantedev/groundwork/next";
 import { gw } from "@/lib/groundwork";
 
-export const GET = jobsRoute(gw, { secret: process.env.CRON_SECRET ?? "" });
+export const GET = jobsRoute(gw, { secret: () => process.env.CRON_SECRET ?? "" });
 export const POST = GET;
 ```
 
@@ -307,7 +307,7 @@ groundwork isn't for edge runtimes, databases other than Postgres, or stacks tha
 ## Requirements
 
 - PostgreSQL 16 or newer.
-- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`. Drizzle 1.0 is supported once it's released; until then CI also runs the tests against its release candidate. A postgres-js client with a built-in column transform (`postgres.camel`, `postgres.pascal` or `postgres.kebab`) works too; a custom `transform` that renames columns another way doesn't.
+- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`. groundwork 1.x works with Drizzle 0.45. Drizzle 1.0 will come with groundwork 2.0: the table types are tied to the Drizzle major, so moving changes them. Until then, CI also runs the tests against Drizzle 1.0's release candidate. A postgres-js client with a built-in column transform (`postgres.camel`, `postgres.pascal` or `postgres.kebab`) works too; a custom `transform` that renames columns another way doesn't.
 - Node.js 22+ or Bun 1.4+. ESM only.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
 - For `@vantedev/groundwork/next`: nothing extra. It never imports `next`; CI tests it with Next.js 16.
