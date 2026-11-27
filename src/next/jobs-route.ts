@@ -63,8 +63,14 @@ export function jobsRoute(
       "jobsRoute needs your groundwork instance: jobsRoute(gw, …).",
     );
   }
-  const source = options?.secret;
-  if ((options as { budgetMs?: unknown } | undefined)?.budgetMs !== undefined) {
+  if (typeof options !== "object" || options === null) {
+    throw new GroundworkError(
+      "invalid_config",
+      "jobsRoute needs options with a secret: jobsRoute(gw, { secret }).",
+    );
+  }
+  const source = options.secret;
+  if ((options as { budgetMs?: unknown }).budgetMs !== undefined) {
     throw new GroundworkError(
       "invalid_config",
       'jobsRoute takes budget, a duration such as "50s"; budgetMs was removed in 1.0.',

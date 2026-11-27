@@ -14,6 +14,7 @@ import { errorText, GroundworkError } from "../internal/errors.ts";
 import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { assertTableColumns } from "../internal/table.ts";
+import { storableId } from "../internal/text.ts";
 import { IDEMPOTENCY_KEY_COLUMNS, type IdempotencyKeysTable } from "../schema/idempotency-keys.ts";
 import {
   decodeResponse,
@@ -87,7 +88,7 @@ function checkScope(scope: unknown): string {
       `scope must be a string of 1 to ${MAX_SCOPE_LENGTH} characters, such as \`apikey:\${key.id}\`.`,
     );
   }
-  return scope;
+  return storableId(scope, "scope");
 }
 
 function checkFingerprint(value: unknown): string | Uint8Array | undefined {

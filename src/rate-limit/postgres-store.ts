@@ -3,7 +3,7 @@ import { type GroundworkDatabase, rowsOf, toNumber } from "../internal/db.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { assertTableColumns } from "../internal/table.ts";
 import { RATE_LIMIT_COLUMNS, type RateLimitsTable } from "../schema/rate-limits.ts";
-import { EPSILON } from "./policy.ts";
+import { capacityOf, EPSILON, fits, levelAt } from "./policy.ts";
 import type { ConsumeInput, ResetOptions, Store, StoreState } from "./types.ts";
 
 export interface PostgresStoreOptions {
@@ -44,7 +44,7 @@ function consumeQuery(table: RateLimitsTable, input: ConsumeInput): SQL {
   if (cost === 0) {
     return sql`
       with input as materialized (select ${nowParam(input.now)} as now)
-      select true as allowed, existing.used, ${ms(sql`existing.updated_at`)} as updated_at,
+      select null::boolean as allowed, existing.used, ${ms(sql`existing.updated_at`)} as updated_at,
         ${ms(sql`existing.expires_at`)} as expires_at, ${ms(sql`input.now`)} as now
       from input left join ${table} existing on existing.key = ${key}::text`;
   }
@@ -114,18 +114,23 @@ export function postgresStore(options: PostgresStoreOptions): Store & { kind: "p
       const [row] = rowsOf<ConsumeRow>(await db.execute(consumeQuery(table, input)));
       if (!row) throw new Error("rate-limit query returned no row");
       const now = toNumber(row.now);
-      if (row.used === null || row.used === undefined) {
-        return { allowed: row.allowed === true, now, row: null };
-      }
-      return {
+      const state: StoreState = {
         allowed: row.allowed === true,
         now,
-        row: {
-          used: toNumber(row.used),
-          updatedAt: toNumber(row.updated_at),
-          expiresAt: toNumber(row.expires_at),
-        },
+        row:
+          row.used === null || row.used === undefined
+            ? null
+            : {
+                used: toNumber(row.used),
+                updatedAt: toNumber(row.updated_at),
+                expiresAt: toNumber(row.expires_at),
+              },
       };
+      if (input.cost !== 0) return state;
+      // A peek only read the row, so decide here, as the other stores do: a counter left over
+      // a lowered limit doesn't fit even nothing.
+      const { policy } = input;
+      return { ...state, allowed: fits(levelAt(policy, state), 0, capacityOf(policy)) };
     },
     async reset(key, resetOptions?: ResetOptions) {
       const target = resetOptions?.tx ?? db;

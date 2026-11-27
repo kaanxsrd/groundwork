@@ -4,7 +4,7 @@ import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../intern
 import { parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { assertTableColumns } from "../internal/table.ts";
-import { storable } from "../internal/text.ts";
+import { storable, storableId } from "../internal/text.ts";
 import { AUDIT_LOG_COLUMNS, type AuditLogTable } from "../schema/audit-log.ts";
 import { decodeCursor, encodeCursor } from "./cursor.ts";
 import { createRedactor, DEFAULT_REDACT, type RedactRule, toJsonObject } from "./json.ts";
@@ -89,15 +89,23 @@ function validateList(values: unknown, label: string): string[] {
   return values as string[];
 }
 
+/** Free text, such as a summary: stored with U+FFFD for what Postgres refuses. */
 function optionalText(value: unknown, label: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value === "string") return storable(value);
   throw new GroundworkError("invalid_argument", `${label} must be a string.`);
 }
 
+/** A value queried by equality, such as a request id: refused if it can't be stored as it is. */
+function optionalKey(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return storableId(value, label);
+  throw new GroundworkError("invalid_argument", `${label} must be a string.`);
+}
+
 function optionalId(value: unknown, label: string): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value === "string") return storable(value);
+  if (typeof value === "string") return storableId(value, label);
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   throw new GroundworkError("invalid_argument", `${label} must be a string or a number.`);
 }
@@ -109,7 +117,7 @@ const oneOrMany = <T>(value: T | readonly T[]): readonly T[] =>
 function inList(column: string, values: readonly (string | number)[]): SQL {
   if (values.length === 0) return sql`false`;
   return sql`${sql.raw(column)} in (${sql.join(
-    values.map((value) => sql`${String(value)}::text`),
+    values.map((value) => sql`${storableId(String(value), column)}::text`),
     sql`, `,
   )})`;
 }
@@ -172,6 +180,7 @@ export function createAuditLog<const TAction extends string, const TEntity exten
         `${at("actor.type")} must be a non-empty string.`,
       );
     }
+    storableId(actor.type, at("actor.type"));
     if (typeof event.action !== "string" || !actions.has(event.action)) {
       throw new GroundworkError(
         "invalid_argument",
@@ -187,6 +196,7 @@ export function createAuditLog<const TAction extends string, const TEntity exten
           `${at("entity.type")} must be a non-empty string.`,
         );
       }
+      storableId(entity.type, at("entity.type"));
       if (entityTypes && !entityTypes.has(entity.type)) {
         throw new GroundworkError(
           "invalid_argument",
@@ -204,7 +214,7 @@ export function createAuditLog<const TAction extends string, const TEntity exten
         ? now()
         : sql`${validDate(event.occurredAt, at("occurredAt"))}::timestamptz`;
 
-    return sql`(${occurredAt}, ${actor.type}::text, ${optionalId(actor.id, at("actor.id"))}::text, ${optionalText(actor.label, at("actor.label"))}::text, ${event.action}::text, ${entityType}::text, ${entityId}::text, ${optionalText(event.summary, at("summary"))}::text, ${jsonbParam(changes === null ? null : JSON.stringify(changes))}, ${jsonbParam(metadata === null ? null : JSON.stringify(metadata))}, ${optionalText(event.ip, at("ip"))}::text, ${optionalText(event.requestId, at("requestId"))}::text)`;
+    return sql`(${occurredAt}, ${actor.type}::text, ${optionalId(actor.id, at("actor.id"))}::text, ${optionalText(actor.label, at("actor.label"))}::text, ${event.action}::text, ${entityType}::text, ${entityId}::text, ${optionalText(event.summary, at("summary"))}::text, ${jsonbParam(changes === null ? null : JSON.stringify(changes))}, ${jsonbParam(metadata === null ? null : JSON.stringify(metadata))}, ${optionalKey(event.ip, at("ip"))}::text, ${optionalKey(event.requestId, at("requestId"))}::text)`;
   }
 
   function toEntry(row: Row): AuditEntry<TAction, TEntity> {
@@ -264,7 +274,7 @@ export function createAuditLog<const TAction extends string, const TEntity exten
       if (typeof filters.search !== "string") {
         throw new GroundworkError("invalid_argument", "search must be a string.");
       }
-      const pattern = `%${filters.search.replace(/[!%_]/g, (c) => `!${c}`)}%`;
+      const pattern = `%${storable(filters.search).replace(/[!%_]/g, (c) => `!${c}`)}%`;
       conditions.push(
         sql`(summary ilike ${pattern} escape '!' or entity_id ilike ${pattern} escape '!' or actor_label ilike ${pattern} escape '!')`,
       );

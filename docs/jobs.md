@@ -66,7 +66,7 @@ gw.jobs.define(type, { schema, run, maxAttempts, backoff, timeout, priority, onE
 
 `context` has `id`, `type`, `attempt` (1 on the first try), `maxAttempts`, `createdAt` and `signal`. Pass `signal` to `fetch` and database calls, so a timed-out job actually stops.
 
-**Payloads are stored as JSON.** Dates become ISO strings and bigints become strings. Use `z.coerce.date()` (or your library's equivalent) when a payload carries dates. A stored payload that fails the schema (written by an older release, say) fails at once without retrying, since it never would pass.
+**Payloads are stored as JSON.** Dates become ISO strings and bigints become strings. Use `z.coerce.date()` (or your library's equivalent) when a payload carries dates. A stored payload that fails the schema (written by an older release, say) fails at once without retrying, since it never would pass. The same goes for a schema whose `validate` throws, so keep it pure: no database or network calls that can fail for a passing reason.
 
 ## Enqueueing
 

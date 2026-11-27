@@ -808,6 +808,13 @@ Add one line per decision: `YYYY-MM-DD: decision, and why`.
   - Left as additive for 1.x: a cost from `withRateLimit`'s key function, pagination for `apiKeys.list` and `jobs.list`, `from`/`to` filters on jobs, a configurable circuit-breaker wait, a `details` field on `GroundworkError`, and a recording logger in `./testing`.
   Docs: a 1.x version policy (docs/releasing.md "Versions"), and the stale 0.x wording ("when the jobs module lands", "exactly once") is gone. `release.yml` now also refuses a prerelease Drizzle and an example whose groundwork range is stale. The example depends on `^1.0.0`.
   **Known and not fixed**, each unproven or out of reach: a key-prefix collision during `apiKeys.create` inside a caller's transaction aborts it instead of retrying (48 random bits); `rotate()` without `tx` stays made if its audit write fails, and the new key is never shown; a job's `delay` counts from the start of the caller's transaction; and the rate limiter has no single probe after a store outage, so every request in the second after each 5s break waits the full timeout.
+- 2026-11-27: **A third fresh review, of the branch's own changes**, proved four bugs, each now with a test that failed before its fix:
+  1. A Postgres peek always said `allowed: true`, even over a lowered limit, while memory and Redis said `false`. It now decides from the row it read, with the same `fits` as the other stores.
+  2. Identifiers still threw on ` `: an API key's `ownerId`, an audit entry's `actor.type` and `entity.type`, and an idempotency `scope`.
+  3. Cleaning identifiers broke lookups, since a filter with the original value didn't match what was stored.
+  Both now follow one rule: free text is cleaned, identifiers (ids, types, scopes, owner ids, request ids, IPs, `dedupeKey`) are refused with `invalid_argument` in writes and in filters, through `storableId()`.
+  4. `jobsRoute(gw)` without options threw a raw `TypeError`; it's `invalid_config` again.
+  Noted, not changed: a schema whose `validate` throws now fails the job for good, so docs/jobs.md says to keep it pure.
 
 ## 11. Alternatives check (2026-11-19)
 

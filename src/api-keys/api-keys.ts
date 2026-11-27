@@ -15,7 +15,7 @@ import { type Duration, isDuration, parseDuration } from "../internal/duration.t
 import { GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { assertTableColumns } from "../internal/table.ts";
-import { storable } from "../internal/text.ts";
+import { storable, storableId } from "../internal/text.ts";
 import type { RateLimiter, RateLimitResult, RateLimitRule } from "../rate-limit/types.ts";
 import { API_KEY_COLUMNS, type ApiKeysTable } from "../schema/api-keys.ts";
 import {
@@ -332,7 +332,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       ) {
         throw new GroundworkError("invalid_argument", "ownerId must be a string or a number.");
       }
-      out.owner_id = sql`${input.ownerId === null ? null : String(input.ownerId)}::text`;
+      out.owner_id = sql`${input.ownerId === null ? null : storableId(String(input.ownerId), "ownerId")}::text`;
     }
     if (input.rateLimit !== undefined || !partial) {
       const rateLimit =
@@ -572,7 +572,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       }
       const conditions: SQL[] = [];
       if (filter.ownerId !== undefined)
-        conditions.push(sql`k.owner_id = ${String(filter.ownerId)}::text`);
+        conditions.push(sql`k.owner_id = ${storableId(String(filter.ownerId), "ownerId")}::text`);
       if (filter.status !== undefined) {
         const statuses = (
           Array.isArray(filter.status) ? filter.status : [filter.status]

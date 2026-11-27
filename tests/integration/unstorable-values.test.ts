@@ -6,9 +6,16 @@ import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import { createApiKeys } from "../../src/api-keys/index.ts";
 import { createAuditLog } from "../../src/audit/index.ts";
+import { createIdempotency } from "../../src/idempotency/index.ts";
 import { isGroundworkError } from "../../src/internal/errors.ts";
 import { createJobs } from "../../src/jobs/index.ts";
-import { apiKeys, auditLog, jobSchedules, jobs as jobsTable } from "../fixtures/schema.ts";
+import {
+  apiKeys,
+  auditLog,
+  idempotencyKeys,
+  jobSchedules,
+  jobs as jobsTable,
+} from "../fixtures/schema.ts";
 import { useTestDatabase } from "../support/database.ts";
 import { recordingLogger, TEST_SECRET, unique } from "../support/rate-limit-conformance.ts";
 
@@ -17,6 +24,15 @@ const database = useTestDatabase();
 const HALF_EMOJI = "Ana 😀".slice(0, 5);
 const NUL = "a\u0000b";
 const R = "�";
+
+async function codeOf(fn: () => Promise<unknown>): Promise<string | undefined> {
+  try {
+    await fn();
+  } catch (error) {
+    return isGroundworkError(error) ? error.code : `not a GroundworkError: ${String(error)}`;
+  }
+  return undefined;
+}
 
 function jobsWith(logger = recordingLogger()) {
   return {
@@ -31,13 +47,13 @@ function jobsWith(logger = recordingLogger()) {
 }
 
 describe("strings Postgres can't store", () => {
-  test("an audit entry stores them with U+FFFD, inside the caller's transaction", async () => {
+  test("an audit entry stores them in free text with U+FFFD, inside the caller's transaction", async () => {
     const audit = createAuditLog({ db: database.current.db, table: auditLog, actions: ["x.y"] });
     const requestId = unique("req");
     await database.current.db.transaction(async (tx) => {
       await audit.record(
         {
-          actor: { type: "user", id: NUL, label: HALF_EMOJI },
+          actor: { type: "user", id: "u_1", label: HALF_EMOJI },
           action: "x.y",
           requestId,
           summary: `said ${NUL}`,
@@ -48,10 +64,57 @@ describe("strings Postgres can't store", () => {
       );
     });
     const [entry] = (await audit.query({ requestId })).entries;
-    expect(entry?.actor).toMatchObject({ id: `a${R}b`, label: `Ana ${R}` });
+    expect(entry?.actor).toMatchObject({ id: "u_1", label: `Ana ${R}` });
     expect(entry?.summary).toBe(`said a${R}b`);
     expect(entry?.changes).toEqual({ name: [null, `Ana ${R}`] });
     expect(entry?.metadata).toEqual({ preview: `a${R}b`, [`ka${R}b`]: 1 });
+  });
+
+  test("identifiers with them are refused, in writes and in filters alike", async () => {
+    // Cleaning an id could make two the same, and the original value would never find the row.
+    const audit = createAuditLog({ db: database.current.db, table: auditLog, actions: ["x.y"] });
+    const actor = { type: "user", id: "u_1" };
+    const writes = [
+      { actor: { type: "user", id: NUL }, action: "x.y" as const },
+      { actor: { type: NUL }, action: "x.y" as const },
+      { actor, action: "x.y" as const, entity: { type: NUL, id: "1" } },
+      { actor, action: "x.y" as const, entity: { type: "post", id: HALF_EMOJI } },
+      { actor, action: "x.y" as const, requestId: NUL },
+      { actor, action: "x.y" as const, ip: NUL },
+    ];
+    for (const write of writes) {
+      expect(await codeOf(() => audit.record(write))).toBe("invalid_argument");
+    }
+    for (const filter of [
+      { actorId: NUL },
+      { actorType: NUL },
+      { entity: { type: "post", id: NUL } },
+      { requestId: HALF_EMOJI },
+    ]) {
+      expect(await codeOf(() => audit.query(filter))).toBe("invalid_argument");
+    }
+
+    const keys = createApiKeys({
+      db: database.current.db,
+      table: apiKeys,
+      secret: TEST_SECRET,
+      namespace: "tst",
+      scopes: { "a:read": "Read" },
+      defaultRateLimit: null,
+    });
+    expect(await codeOf(() => keys.create({ name: "k", scopes: ["a:read"], ownerId: NUL }))).toBe(
+      "invalid_argument",
+    );
+    expect(await codeOf(() => keys.list({ ownerId: NUL }))).toBe("invalid_argument");
+
+    const idempotency = createIdempotency({
+      db: database.current.db,
+      table: idempotencyKeys,
+      secret: TEST_SECRET,
+    });
+    expect(
+      await codeOf(() => idempotency.run({ scope: `orders${NUL}`, key: unique("k") }, () => 1)),
+    ).toBe("invalid_argument");
   });
 
   test("a job payload is enqueued with U+FFFD, and its handler gets that", async () => {

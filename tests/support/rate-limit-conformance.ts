@@ -171,6 +171,21 @@ export function rateLimitConformance(label: string, makeLimiter: () => LimiterFa
       expect((await check(subject)).resetAt).toEqual(at(45_000));
     });
 
+    test("a peek reports a counter left over a lowered limit as denied, as a check does", async () => {
+      const h = setup(makeLimiter());
+      const name = unique("fw");
+      const subject = unique("ip");
+      const wide = h.rule({ name, limit: 10, window: "1m" });
+      await wide.check(subject, { cost: 5 });
+      // The same rule, redeployed with a lower limit (or another instance still on the old one).
+      const narrow = h.rule({ name, limit: 3, window: "1m" });
+      expect(await narrow.check(subject)).toMatchObject({ allowed: false, remaining: 0 });
+      expect(await narrow.check(subject, { cost: 0 })).toMatchObject({
+        allowed: false,
+        remaining: 0,
+      });
+    });
+
     test("reset forgets a subject", async () => {
       const h = setup(makeLimiter());
       const { rule, check } = h.rule({ name: unique("fw"), limit: 1, window: "1h" });

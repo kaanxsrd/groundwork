@@ -380,6 +380,8 @@ describe("jobsRoute", () => {
       expect(codeOf(() => jobsRoute({ jobs }, { secret: secret as never }))).toBe("invalid_config");
     }
     expect(codeOf(() => jobsRoute(undefined as never, { secret: SECRET }))).toBe("invalid_config");
+    expect(codeOf(() => jobsRoute({ jobs }, undefined as never))).toBe("invalid_config");
+    expect(codeOf(() => jobsRoute({ jobs }, null as never))).toBe("invalid_config");
   });
 
   test("checks budget and concurrency when it's created, not on every cron call", () => {
