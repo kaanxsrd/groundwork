@@ -160,8 +160,8 @@ export interface RunSummary {
 }
 
 export interface RunOnceOptions {
-  /** Stop claiming new jobs after this many milliseconds. Jobs already running finish. Defaults to 10,000. */
-  readonly budgetMs?: number | undefined;
+  /** Stop claiming new jobs after this long, such as `"50s"`. Jobs already running finish. Defaults to `"10s"`. */
+  readonly budget?: Duration | undefined;
   /** Jobs at once. Defaults to 4. */
   readonly concurrency?: number | undefined;
 }
@@ -262,7 +262,7 @@ export interface Jobs {
   ): void;
   /** Makes a schedule due now. Returns `false` if it isn't defined. */
   trigger(name: string): Promise<boolean>;
-  /** Runs due jobs and schedules until none are left or `budgetMs` runs out. For cron and HTTP triggers. */
+  /** Runs due jobs and schedules until none are left or `budget` runs out. For cron and HTTP triggers. */
   runOnce(options?: RunOnceOptions): Promise<RunSummary>;
   /** The long-running worker. Resolves after `signal` aborts and running jobs finish. */
   work(options?: WorkOptions): Promise<RunSummary>;

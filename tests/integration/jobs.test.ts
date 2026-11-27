@@ -102,7 +102,7 @@ describe("must-pass", () => {
     await Promise.all([1, 2, 3].map(() => handle.enqueue({})));
 
     // The victim claims all three and then hangs, as if the process froze or was killed.
-    const victimRun = victim.runOnce({ concurrency: 3, budgetMs: 50 });
+    const victimRun = victim.runOnce({ concurrency: 3, budget: "50ms" });
     await waitUntil(async () =>
       (await rowsOfType(database.current, type)).every((r) => r.locked_by === "victim"),
     );
@@ -402,7 +402,7 @@ describe("retries", () => {
     hung.define(type, { timeout: false, maxAttempts: 1, run: () => new Promise(() => {}) });
     const handle = jobsOn(database.current, { clock }).define(type, { maxAttempts: 1, run() {} });
     const { id } = await handle.enqueue({});
-    void hung.runOnce({ budgetMs: 50 });
+    void hung.runOnce({ budget: "50ms" });
     await waitUntil(async () => (await jobsOn(database.current).get(id))?.status === "running");
     clock.advance("61s");
     let exhausted = 0;
@@ -576,7 +576,7 @@ describe("workers", () => {
       run: () => new Promise((resolve) => setTimeout(resolve, 100)),
     });
     await Promise.all(Array.from({ length: 10 }, () => handle.enqueue({})));
-    const summary = await jobs.runOnce({ budgetMs: 150, concurrency: 1 });
+    const summary = await jobs.runOnce({ budget: "150ms", concurrency: 1 });
     expect(summary.completed).toBeGreaterThanOrEqual(1);
     expect(summary.completed).toBeLessThan(10);
     expect(summary.claimed).toBe(summary.completed);
@@ -714,7 +714,7 @@ describe("operations", () => {
         release = resolve;
       });
     });
-    const firstRun = jobs.runOnce({ budgetMs: 50 });
+    const firstRun = jobs.runOnce({ budget: "50ms" });
     await waitUntil(async () => runs === 1);
     clock.advance("1m");
     const other = jobsOn(database.current, { clock, lease: "10m" });

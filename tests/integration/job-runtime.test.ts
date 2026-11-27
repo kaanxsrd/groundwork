@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
+import { isGroundworkError } from "../../src/internal/errors.ts";
 import type { StandardSchemaV1 } from "../../src/jobs/index.ts";
 import { createJobs } from "../../src/jobs/index.ts";
 import { jobSchedules, jobs as jobsTable } from "../fixtures/schema.ts";
@@ -32,6 +33,17 @@ const throwingSchema: StandardSchemaV1<unknown, { at: string }> = {
 };
 
 describe("job runtime", () => {
+  test("runOnce takes a budget duration, and says so when it gets 0.x's budgetMs", async () => {
+    const jobs = jobsWith();
+    expect(await jobs.runOnce({ budget: "200ms" })).toMatchObject({ claimed: 0 });
+    for (const options of [{ budget: "0s" }, { budget: 200 }, { budgetMs: 200 }]) {
+      const error = await Promise.resolve()
+        .then(() => jobs.runOnce(options as never))
+        .catch((thrown: unknown) => thrown);
+      expect(isGroundworkError(error) && error.code).toBe("invalid_argument");
+    }
+  });
+
   test("a schema that throws fails the job at once with its real error, and the rest still run", async () => {
     const jobs = jobsWith();
     let ran = 0;

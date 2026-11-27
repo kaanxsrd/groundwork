@@ -134,7 +134,7 @@ describe("route helpers with a real groundwork instance", () => {
       ticks++;
     });
     await welcome.enqueue({ to: "a@example.test" });
-    const route = jobsRoute(gw, { secret: CRON_SECRET, budgetMs: 5_000 });
+    const route = jobsRoute(gw, { secret: CRON_SECRET, budget: "5s" });
     const call = (query = "", auth = `Bearer ${CRON_SECRET}`) =>
       route(
         new Request(`https://app.example.test/api/jobs${query}`, {

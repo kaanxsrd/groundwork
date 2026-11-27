@@ -119,7 +119,7 @@ describe("enqueue with replace", () => {
       },
     });
     const first = await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const running = jobs.runOnce({ budgetMs: 50 });
+    const running = jobs.runOnce({ budget: "50ms" });
     await waitUntil(() => seen.length === 1);
 
     // The running job may have read its data already, so this change gets a job of its own.
@@ -158,7 +158,7 @@ describe("enqueue with replace", () => {
     const producer = jobsOn(database.current, { clock });
     const handle = producer.define(type, { run(_payload: { n: number }) {} });
     const first = await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const victimRun = victim.runOnce({ budgetMs: 50 });
+    const victimRun = victim.runOnce({ budget: "50ms" });
     await waitUntil(() => releases.length === 1);
 
     clock.advance("31s");
@@ -289,7 +289,7 @@ describe("enqueue with replace", () => {
       run(_payload: { n: number }) {},
     });
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const victimRun = victim.runOnce({ budgetMs: 50 });
+    const victimRun = victim.runOnce({ budget: "50ms" });
     await waitUntil(() => releases.length === 1);
 
     // Its only attempt is running, and its worker is gone: the replace must still get a run.
@@ -391,7 +391,7 @@ describe("enqueue with replace", () => {
       run(_payload: { n: number }) {},
     });
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const victimRun = victim.runOnce({ budgetMs: 50 });
+    const victimRun = victim.runOnce({ budget: "50ms" });
     await waitUntil(() => releases.length === 1);
     // A replace takes the key, which sets the running job's attempts to its maxAttempts. Then
     // its worker stops, and the next claim takes attempts one past it.
@@ -475,7 +475,7 @@ describe("enqueue with replace", () => {
       run(_payload: { n: number }) {},
     });
     const first = await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const victimRun = victim.runOnce({ budgetMs: 50 });
+    const victimRun = victim.runOnce({ budget: "50ms" });
     await waitUntil(() => releases.length === 1);
 
     // The first statement sees a live lease, and the lease runs out before the second. Before,
@@ -515,7 +515,7 @@ describe("enqueue with replace", () => {
     const busy = jobsOn(database.current, { clock, workerId: "busy" });
     const handle = define(busy);
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const busyRun = busy.runOnce({ budgetMs: 50 });
+    const busyRun = busy.runOnce({ budget: "50ms" });
     await waitUntil(() => seen.length === 1);
 
     // A newer change: the running job gives up its key, and the new job runs and completes.
@@ -576,7 +576,7 @@ describe("enqueue with replace", () => {
       const producer = jobsOn(database.current, { clock });
       const handle = producer.define(type, { maxAttempts: 1, run(_payload: { n: number }) {} });
       const { id } = await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-      const stalledRun = stalled.runOnce({ budgetMs: 50 });
+      const stalledRun = stalled.runOnce({ budget: "50ms" });
       await waitUntil(() => releases.has(1));
       clock.advance("31s");
 
@@ -592,7 +592,7 @@ describe("enqueue with replace", () => {
       }
       // Claimed again by worker "w": attempt 1, as the stalled run's was.
       const recovered = sameWorker();
-      const recoveredRun = recovered.runOnce({ budgetMs: 50 });
+      const recoveredRun = recovered.runOnce({ budget: "50ms" });
       await waitUntil(() => releases.has(2));
       expect((await rowsOfType(type)).map((row) => [row.status, row.attempts])).toEqual([
         ["running", 1],
@@ -629,7 +629,7 @@ describe("enqueue with replace", () => {
       run: () => new Promise<string>((resolve) => releases.push(() => resolve("stale"))),
     });
     const { id } = await handle.enqueue(undefined);
-    const stalledRun = stalled.runOnce({ budgetMs: 50 });
+    const stalledRun = stalled.runOnce({ budget: "50ms" });
     await waitUntil(() => releases.length === 1);
     clock.advance("31s");
     await database.current.rows(sql`update ${jobsTable} set status = 'running',
@@ -716,7 +716,7 @@ describe("enqueue with replace", () => {
       run(_payload: { n: number }) {},
     });
     await handle.enqueue({ n: 1 }, { dedupeKey: "k", replace: true });
-    const victimRun = victim.runOnce({ budgetMs: 50 });
+    const victimRun = victim.runOnce({ budget: "50ms" });
     await waitUntil(() => seen.length === 1);
     // The key goes to a new job while the first is alive; then the first's worker stalls.
     expect((await handle.enqueue({ n: 2 }, { dedupeKey: "k", replace: true })).created).toBe(true);

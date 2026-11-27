@@ -23,6 +23,15 @@ function codeOf(fn: () => unknown): string | undefined {
   return undefined;
 }
 
+async function codeOfAsync(fn: () => Promise<unknown>): Promise<string | undefined> {
+  try {
+    await fn();
+  } catch (error) {
+    return isGroundworkError(error) ? error.code : `not a GroundworkError: ${String(error)}`;
+  }
+  return undefined;
+}
+
 const context: DefaultRouteContext = { params: Promise.resolve({}) };
 
 function headersWith(name: string, value: string): Headers {
@@ -373,6 +382,48 @@ describe("jobsRoute", () => {
     expect(codeOf(() => jobsRoute(undefined as never, { secret: SECRET }))).toBe("invalid_config");
   });
 
+  test("checks budget and concurrency when it's created, not on every cron call", () => {
+    const { jobs } = fakeJobs();
+    for (const budget of ["0s", "fast", 5000]) {
+      expect(codeOf(() => jobsRoute({ jobs }, { secret: SECRET, budget: budget as never }))).toBe(
+        "invalid_config",
+      );
+    }
+    for (const concurrency of [0, -1, 1.5, "4"]) {
+      expect(
+        codeOf(() => jobsRoute({ jobs }, { secret: SECRET, concurrency: concurrency as never })),
+      ).toBe("invalid_config");
+    }
+    // 0.x's budgetMs would otherwise be ignored without a word.
+    expect(codeOf(() => jobsRoute({ jobs }, { secret: SECRET, budgetMs: 5000 } as never))).toBe(
+      "invalid_config",
+    );
+  });
+
+  test("a secret function is read on the first request, so next build doesn't need it", async () => {
+    const { jobs, runs } = fakeJobs();
+    let reads = 0;
+    let value: string | undefined;
+    const route = jobsRoute(
+      { jobs },
+      {
+        secret: () => {
+          reads++;
+          return value ?? "";
+        },
+      },
+    );
+    expect(reads).toBe(0);
+    value = SECRET;
+    expect((await call(route, `Bearer ${SECRET}`)).status).toBe(200);
+    expect((await call(route, `Bearer ${SECRET}`)).status).toBe(200);
+    expect(reads).toBe(1);
+    expect(runs).toHaveLength(2);
+
+    const unset = jobsRoute({ jobs }, { secret: () => "" });
+    expect(await codeOfAsync(() => call(unset, `Bearer ${SECRET}`))).toBe("invalid_config");
+  });
+
   test("rejects requests without the bearer secret", async () => {
     const { jobs, runs } = fakeJobs();
     const route = jobsRoute({ jobs }, { secret: SECRET });
@@ -393,12 +444,12 @@ describe("jobsRoute", () => {
 
   test("runs due jobs once and returns the summary", async () => {
     const { jobs, runs, summary } = fakeJobs();
-    const route = jobsRoute({ jobs }, { secret: SECRET, budgetMs: 5_000, concurrency: 2 });
+    const route = jobsRoute({ jobs }, { secret: SECRET, budget: "5s", concurrency: 2 });
     const response = await call(route, `bearer   ${SECRET}`);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual(summary);
-    expect(runs).toEqual([{ budgetMs: 5_000, concurrency: 2 }]);
+    expect(runs).toEqual([{ budget: "5s", concurrency: 2 }]);
   });
 
   test("?schedule= makes that schedule due first, and 404s for unknown ones", async () => {

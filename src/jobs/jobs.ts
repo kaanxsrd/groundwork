@@ -1284,13 +1284,16 @@ export function createJobs(options: JobsOptions): Jobs {
     },
 
     runOnce(runOptions: RunOnceOptions = {}) {
-      const budgetMs = runOptions.budgetMs ?? 10_000;
-      if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      if ((runOptions as { budgetMs?: unknown }).budgetMs !== undefined) {
         throw new GroundworkError(
           "invalid_argument",
-          "budgetMs must be a positive number of milliseconds.",
+          'runOnce takes budget, a duration such as "10s"; budgetMs was removed in 1.0.',
         );
       }
+      const budgetMs =
+        runOptions.budget === undefined
+          ? 10_000
+          : parseDuration(runOptions.budget, { label: "budget", minMs: 1 });
       return loop({
         concurrency: validConcurrency(runOptions.concurrency),
         deadline: performance.now() + budgetMs,

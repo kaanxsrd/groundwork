@@ -10,5 +10,5 @@ export const maxDuration = 60;
  * Runs due jobs and schedules for up to 50 seconds. Vercel Cron calls it (see vercel.json); any
  * other scheduler can too: `curl -H "Authorization: Bearer $CRON_SECRET" …/api/jobs`.
  */
-export const GET = jobsRoute(gw, { secret: env.CRON_SECRET, budgetMs: 50_000 });
+export const GET = jobsRoute(gw, { secret: env.CRON_SECRET, budget: "50s" });
 export const POST = GET;
