@@ -72,7 +72,7 @@
     "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "publishConfig": {
     "access": "public"
@@ -98,7 +98,7 @@
     "changeset": "changeset"
   },
   "peerDependencies": {
-    "drizzle-orm": "^0.45.0"
+    "drizzle-orm": "^1.0.0-rc.6"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
@@ -107,8 +107,8 @@
     "@types/bun": "1.4.4",
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
-    "drizzle-kit": "0.31.11",
-    "drizzle-orm": "0.45.4",
+    "drizzle-kit": "1.0.0-rc.6",
+    "drizzle-orm": "1.0.0-rc.6",
     "ioredis": "6.0.0",
     "pg": "8.23.1",
     "postgres": "4.1.1",

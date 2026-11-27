@@ -4,7 +4,7 @@ Thanks for helping. Issues and pull requests are welcome; for anything large, op
 
 ## Setup
 
-You need Bun 1.4, Docker and (for the smoke test) Node.js 22 or newer.
+You need Bun 1.4, Docker and (for the smoke test) Node.js 22.12 or newer.
 
 ```sh
 bun install
@@ -23,7 +23,7 @@ bun run smoke      # build, publint, attw, then the packed package on Node (need
 bun run example    # next build + HTTP checks of examples/next-app and the README quickstart
 ```
 
-CI runs all of these, and the integration tests against Postgres 16 and 18 with both drivers. A `drizzle-next` job also runs them against Drizzle 1.0's release candidate; it can fail without failing the workflow, but a failure there is worth a look. Redis is only needed for the Redis rate-limit store tests; Postgres stays the only infrastructure groundwork requires.
+CI runs all of these, and the integration tests against Postgres 16 and 18 with both drivers. A `drizzle-newest` job also runs them on Drizzle's newest release; it can fail without failing the workflow, but a failure there is worth a look. Redis is only needed for the Redis rate-limit store tests; Postgres stays the only infrastructure groundwork requires.
 
 ## Tests
 

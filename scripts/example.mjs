@@ -27,7 +27,9 @@ import postgres from "postgres";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const exampleDir = join(root, "examples", "next-app");
-const packageName = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).name;
+const { name: packageName, devDependencies } = JSON.parse(
+  readFileSync(join(root, "package.json"), "utf8"),
+);
 const mode = process.argv[2] ?? "all";
 const modes = ["all", "example", "quickstart", "generate", "dev"];
 if (!modes.includes(mode)) throw new Error(`Usage: node scripts/example.mjs [${modes.join("|")}]`);
@@ -198,6 +200,20 @@ async function example() {
   await cleanup();
 }
 
+/**
+ * Pins drizzle-orm and drizzle-kit to the repo's versions while those are prereleases: until the
+ * release is out, npm's `latest` is a version groundwork no longer supports.
+ */
+function pinPrereleases(command) {
+  return command
+    .split(" ")
+    .map((word) => {
+      const pinned = ["drizzle-orm", "drizzle-kit"].includes(word) ? devDependencies[word] : "";
+      return pinned.includes("-") ? `${word}@${pinned}` : word;
+    })
+    .join(" ");
+}
+
 /** The README's quickstart: its sh commands and its files with filename="…". */
 function readQuickstart() {
   const readme = readFileSync(join(root, "README.md"), "utf8");
@@ -247,9 +263,10 @@ async function quickstart() {
   );
   for (const command of commands.filter((c) => c.startsWith("npm install"))) {
     // The README installs groundwork from npm; this installs the tarball under test instead.
-    const local = command.replace(` ${packageName}`, ` "${pathToFileURL(tarball).href}"`);
-    if (command.includes(packageName) && local === command)
+    const swapped = command.replace(` ${packageName}`, ` "${pathToFileURL(tarball).href}"`);
+    if (command.includes(packageName) && swapped === command)
       throw new Error(`Could not swap ${packageName} in: ${command}`);
+    const local = pinPrereleases(swapped);
     await step(command, () => run(`${local} --no-audit --no-fund --loglevel=error`, app));
   }
   await step(`write the README's ${files.length} files`, () => {

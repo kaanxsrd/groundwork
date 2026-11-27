@@ -28,7 +28,7 @@ import {
 } from "@vantedev/groundwork/rate-limit";
 import { groundworkTables } from "@vantedev/groundwork/schema";
 import { createTestClock } from "@vantedev/groundwork/testing";
-import { sql } from "drizzle-orm";
+import { defineRelations, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
@@ -51,9 +51,23 @@ const opsName: "ops" = ops.schema.schemaName;
 // @ts-expect-error there is no schema object without the schema option
 groundworkTables().schema;
 
-// Databases from either driver, typed with the app's own schema, are accepted as they are.
-declare const pgDb: NodePgDatabase<{ rateLimits: typeof rateLimits }>;
-declare const jsDb: PostgresJsDatabase<{ ops: typeof ops.rateLimits }>;
+// Databases from either driver, typed with the app's own relations, are accepted as they are.
+const appRelations = defineRelations({ rateLimits });
+const opsRelations = defineRelations({ ops: ops.rateLimits });
+declare const pgDb: NodePgDatabase<typeof appRelations>;
+declare const jsDb: PostgresJsDatabase<typeof opsRelations>;
+
+// The tables are typed for the installed Drizzle, so the app's own queries take them.
+async function readRateLimits() {
+  const [row] = await jsDb.select().from(rateLimits).where(sql`true`);
+  if (!row) return;
+  const used: number = row.used;
+  // @ts-expect-error used is a number: the table's column types came through
+  const notText: string = row.used;
+  void used;
+  void notText;
+}
+void readRateLimits;
 const secret = "x".repeat(32);
 const redis = redisStore({ client: { eval: async () => [] } });
 

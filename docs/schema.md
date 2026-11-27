@@ -10,7 +10,7 @@ export const { rateLimits, auditLog, apiKeys, jobs, jobSchedules, idempotencyKey
   groundworkTables();
 ```
 
-Make sure drizzle-kit reads this file (it's covered by the `schema` glob in `drizzle.config.ts`), then:
+Make sure drizzle-kit reads this file, and only once: list it in `schema` in `drizzle.config.ts`, or list an index file that re-exports it, but not both (see the note in [Moving to Drizzle 1.0](#moving-to-drizzle-10)). Then:
 
 ```sh
 npx drizzle-kit generate   # writes the migration; read it
@@ -20,6 +20,32 @@ npx drizzle-kit migrate    # or apply it however you apply migrations today
 **Only the tables you export are created.** Destructure just the ones for the modules you use. As more modules land, `groundworkTables()` returns more tables, but nothing changes in your database until you export them.
 
 **After upgrading groundwork, run `npx drizzle-kit generate` again.** A release can add a column to a table you export (0.4.0 added `claims` to `gw_jobs`), and its changelog entry says so. Apply the migration before you deploy the new version: groundwork's statements use the new column straight away.
+
+## Moving to Drizzle 1.0
+
+groundwork 0.5 needs `drizzle-orm` and `drizzle-kit` 1.0; 0.4 is the last version for Drizzle 0.45. Your groundwork calls stay as they are, since they take a 1.0 database just as they took a 0.45 one. What changes is the table types: they come from Drizzle 1.0 now, so your own queries on groundwork's tables need 1.0 as well.
+
+1. Upgrade the three packages together:
+
+   ```sh
+   npm install @vantedev/groundwork@^0.5 drizzle-orm@^1
+   npm install -D drizzle-kit@^1
+   ```
+
+2. Convert your migrations folder, once. drizzle-kit 1.0 and Drizzle 1.0's `migrate()` both refuse the old format, the one with `meta/_journal.json`:
+
+   ```sh
+   npx drizzle-kit up
+   ```
+
+3. Make the changes Drizzle 1.0 needs in your own code. Drizzle's [upgrade guide](https://orm.drizzle.team/docs/upgrade-v1) and its [list of changes](https://orm.drizzle.team/docs/v0-v1-changes) cover them all. Three are easy to miss:
+   - **`drizzle(client)` becomes `drizzle({ client })`.** TypeScript flags the old call, but plain JavaScript (a migration or seed script, say) doesn't. There, 1.0 ignores the client and connects with the driver's defaults: `localhost`, with your OS user name as the database.
+   - **`schema`, and `casing`, are no longer `drizzle()` options.** Relational queries take `relations` from `defineRelations()`, and casing is set on the tables.
+   - **On postgres-js, your own raw SQL behaves differently.** Drizzle 0.45 turned off the client's own type handling, and 1.0 doesn't. JSON bound as `${JSON.stringify(value)}::jsonb` is stored as a JSON string, so bind it as text: `${json}::text::jsonb`, as groundwork does. Timestamps and dates from `db.execute()` come back as `Date` objects, not strings. TypeScript doesn't catch either.
+
+4. Run `npx drizzle-kit generate`. It should find no changes in groundwork's tables. CI checks this on groundwork's own migrations after `drizzle-kit up`.
+
+   If it stops after warnings like `There's a duplicate column name 'key' in "public"."gw_rate_limits" table`, drizzle-kit is reading each table twice. That happens when the `schema` in `drizzle.config.ts` covers a file that re-exports the others it covers, such as a folder with an `index.ts`. drizzle-kit 0.31 ignored the repeat, but 1.0 doesn't. Point `schema` at the index file alone if it re-exports every table file. Otherwise, list the table files and leave the index out: a table drizzle-kit doesn't read is one it plans to drop.
 
 ## Options
 

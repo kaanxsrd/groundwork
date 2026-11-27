@@ -137,7 +137,7 @@ import { createRouteHelpers } from "@vantedev/groundwork/next";
 import postgres from "postgres";
 import * as tables from "@/db/schema";
 
-export const db = drizzle(postgres(process.env.DATABASE_URL ?? ""));
+export const db = drizzle({ client: postgres(process.env.DATABASE_URL ?? "") });
 
 export const gw = createGroundwork({
   db,
@@ -307,8 +307,9 @@ groundwork isn't for edge runtimes, databases other than Postgres, or stacks tha
 ## Requirements
 
 - PostgreSQL 16 or newer.
-- `drizzle-orm` 0.45 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`. Drizzle 1.0 is supported once it's released; until then CI also runs the tests against its release candidate.
-- Node.js 22+ or Bun 1.4+. ESM only.
+- `drizzle-orm` 1.0 with any Postgres driver (`postgres`, `pg`, Neon's websocket driver…). groundwork's own statements are all single statements; passing `{ tx }` needs a driver that supports transactions. CI tests `postgres` and `pg`. groundwork 0.4 is the last version for Drizzle 0.45. [Moving to 1.0](docs/schema.md#moving-to-drizzle-10) changes no groundwork calls.
+- A client that returns column names unchanged. groundwork reads its own result columns by name, so a client-level transform such as postgres-js's `transform: postgres.camel` breaks it.
+- Node.js 22.12+ or Bun 1.4+. ESM only.
 - TypeScript 5.9+ if you use the types (CI checks 5.9, 6.0 and 7.0).
 - For `@vantedev/groundwork/next`: nothing extra. It never imports `next`; CI tests it with Next.js 16.
 - Optional: Redis, only for the Redis rate-limit store (tested with Redis 8, ioredis 6 and node-redis 6).

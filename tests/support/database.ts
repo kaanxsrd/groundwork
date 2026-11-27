@@ -17,7 +17,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { SQL } from "drizzle-orm";
 import { drizzle as drizzleNodePg } from "drizzle-orm/node-postgres";
-import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
+import type { PgAsyncDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { drizzle as drizzlePostgresJs } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import pg from "pg";
@@ -29,7 +29,7 @@ export const DEFAULT_TEST_DATABASE_URL =
 export type TestDriver = "postgres-js" | "node-postgres";
 
 /** Any Drizzle Postgres database, whichever driver created it. This is what groundwork accepts. */
-export type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
+export type AnyPgDatabase = PgAsyncDatabase<PgQueryResultHKT>;
 
 export interface TestConnection {
   readonly db: AnyPgDatabase;
