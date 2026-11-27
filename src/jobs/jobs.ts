@@ -17,6 +17,7 @@ import { renewEveryMs } from "../internal/lease.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { type StandardSchemaV1, validateWith } from "../internal/standard-schema.ts";
 import { assertTableColumns } from "../internal/table.ts";
+import { isStorable, storable } from "../internal/text.ts";
 import {
   JOB_COLUMNS,
   JOB_SCHEDULE_COLUMNS,
@@ -75,6 +76,12 @@ const MAX_LIST = 1_000;
 const MAX_ENQUEUE_MANY = 1_000;
 const PRUNE_BATCH = 5_000;
 const MAX_ERROR_LENGTH = 2_000;
+/**
+ * SQLSTATEs for a value Postgres can't store, which retrying doesn't change: invalid JSON or text
+ * (22P02), a character the encoding can't hold such as `\u0000` (22P05, 22021), and a value over
+ * a size limit (54000).
+ */
+const UNSTORABLE = new Set(["22P02", "22P05", "22021", "54000"]);
 const MAX_BACKOFF_STEPS = 100;
 /**
  * The largest `maxAttempts`: one less than Postgres's `integer`, which `attempts` and
@@ -407,11 +414,15 @@ export function createJobs(options: JobsOptions): Jobs {
     const dedupeKey = enqueueOptions.dedupeKey ?? null;
     if (
       dedupeKey !== null &&
-      (typeof dedupeKey !== "string" || dedupeKey === "" || dedupeKey.length > 500)
+      (typeof dedupeKey !== "string" ||
+        dedupeKey === "" ||
+        dedupeKey.length > 500 ||
+        !isStorable(dedupeKey))
     ) {
+      // Not cleaned like free text: two different keys must never become the same one.
       throw new GroundworkError(
         "invalid_argument",
-        "dedupeKey must be a non-empty string of at most 500 characters.",
+        "dedupeKey must be a non-empty string of at most 500 characters, without \\u0000 or a lone surrogate.",
       );
     }
     if (enqueueOptions.runAt !== undefined && enqueueOptions.delay !== undefined) {
@@ -879,7 +890,7 @@ export function createJobs(options: JobsOptions): Jobs {
     permanent: boolean,
   ): Promise<"retried" | "failed" | "lost"> {
     const { name, message } = errorText(error);
-    const lastError = `${name}: ${message}`.slice(0, MAX_ERROR_LENGTH);
+    const lastError = storable(`${name}: ${message}`.slice(0, MAX_ERROR_LENGTH));
     const exhausted = permanent || job.attempts >= job.max_attempts;
     const delayMs = exhausted
       ? 0
@@ -982,7 +993,12 @@ export function createJobs(options: JobsOptions): Jobs {
 
     let payload = job.payload;
     if (handler.schema) {
-      const checked = await validateWith(handler.schema, job.payload);
+      // A schema that throws (a transform calling new Date(x).toISOString(), say) is as final as
+      // one that rejects: the same payload would make it throw again.
+      const checked = await validateWith(handler.schema, job.payload).catch((thrown: unknown) => {
+        const { name, message } = errorText(thrown);
+        return { ok: false as const, message: `the schema threw ${name}: ${message}` };
+      });
       if (!checked.ok) {
         // A payload that doesn't validate never will: fail now instead of retrying.
         const error = new GroundworkError(
@@ -1030,17 +1046,60 @@ export function createJobs(options: JobsOptions): Jobs {
         });
       });
       aborted.catch(() => {});
-      const result = await Promise.race([running, aborted]);
-      if (await complete(job, handler, result)) counters.completed++;
+      let result: unknown;
+      try {
+        result = await Promise.race([running, aborted]);
+      } catch (error) {
+        const outcome = await fail(job, handler, error, false);
+        record(outcome);
+        if (outcome === "failed") await runExhausted(payload, error);
+        return;
+      }
+      // The handler succeeded. Nothing after this counts as a failed attempt: retrying would
+      // repeat its side effects, and onExhausted would report work that was done.
+      if (await completeSucceeded(job, handler, result)) counters.completed++;
       else record("lost");
-    } catch (error) {
-      const outcome = await fail(job, handler, error, false);
-      record(outcome);
-      if (outcome === "failed") await runExhausted(payload, error);
     } finally {
       clearTimeout(timer);
       clearInterval(heartbeat);
     }
+  }
+
+  /**
+   * Marks a job whose handler succeeded as completed. A result that can't be stored (a `toJSON`
+   * that throws, or JSON beyond what `jsonb` holds) is stored as `null` instead, with an error
+   * logged. Any other error, a lost connection say, propagates: the job stays running until its
+   * lease runs out and then runs again, as after a crash.
+   */
+  async function completeSucceeded(
+    job: StoredJob,
+    handler: Handler,
+    result: unknown,
+  ): Promise<boolean> {
+    let stored: unknown;
+    try {
+      stored = toJsonValue(result);
+      JSON.stringify(stored);
+    } catch (error) {
+      return completeWithoutResult(job, handler, error);
+    }
+    try {
+      return await complete(job, handler, stored);
+    } catch (error) {
+      if (!UNSTORABLE.has(pgCode(error) ?? "")) throw error;
+      return completeWithoutResult(job, handler, error);
+    }
+  }
+
+  async function completeWithoutResult(job: StoredJob, handler: Handler, error: unknown) {
+    logger.error(
+      `Job "${job.type}" succeeded, but its result can't be stored; it's stored as null.`,
+      {
+        id: job.id,
+        error: errorText(error),
+      },
+    );
+    return complete(job, handler, null);
   }
 
   async function loop(settings: {
@@ -1053,6 +1112,10 @@ export function createJobs(options: JobsOptions): Jobs {
     const started = performance.now();
     const counters: Counters = { claimed: 0, completed: 0, retried: 0, failed: 0, scheduled: 0 };
     const inFlight = new Set<Promise<void>>();
+    // Called once when the next job finishes. One set of listeners instead of a `.then` on every
+    // running job each time round, which piled up on long jobs.
+    const onFinish = new Set<() => void>();
+    const nextFinish = () => new Promise<void>((resolve) => onFinish.add(resolve));
     const stopping = () =>
       settings.signal?.aborted === true ||
       (settings.deadline !== null && performance.now() >= settings.deadline);
@@ -1062,11 +1125,12 @@ export function createJobs(options: JobsOptions): Jobs {
       new Promise<void>((resolve) => {
         const timer = setTimeout(done, msToWait);
         settings.signal?.addEventListener("abort", done, { once: true });
-        for (const promise of inFlight) promise.then(done, done);
+        onFinish.add(done);
         function done() {
           clearTimeout(timer);
           // Without this, every idle poll of a long-running worker would leave a listener behind.
           settings.signal?.removeEventListener("abort", done);
+          onFinish.delete(done);
           resolve();
         }
       });
@@ -1083,18 +1147,30 @@ export function createJobs(options: JobsOptions): Jobs {
           if (claimed.length > 0) once.reset("claim");
           counters.claimed += claimed.length;
           for (const job of claimed) {
-            const promise: Promise<void> = execute(job, counters).finally(() =>
-              inFlight.delete(promise),
-            );
+            const promise: Promise<void> = execute(job, counters)
+              .catch((error: unknown) => {
+                // Only the database calls that record the outcome get here. The job stays
+                // running until its lease runs out, then runs again; the other jobs go on.
+                logger.error(
+                  `Job "${job.type}" ran, but its outcome couldn't be recorded; it runs again after its lease.`,
+                  { id: job.id, error: errorText(error) },
+                );
+              })
+              .finally(() => {
+                inFlight.delete(promise);
+                const listeners = [...onFinish];
+                onFinish.clear();
+                for (const listener of listeners) listener();
+              });
             inFlight.add(promise);
           }
           if (inFlight.size >= settings.concurrency) {
-            await Promise.race(inFlight);
+            await nextFinish();
           } else if (claimed.length < free) {
             // Nothing more is due right now.
             if (settings.mode === "once") {
               if (inFlight.size === 0) break;
-              await Promise.race(inFlight); // a finishing job may have enqueued another
+              await nextFinish(); // a finishing job may have enqueued another
             } else {
               await wait(settings.pollMs);
             }

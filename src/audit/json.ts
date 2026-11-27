@@ -1,4 +1,5 @@
 import { GroundworkError } from "../internal/errors.ts";
+import { storable } from "../internal/text.ts";
 
 /** What a redacted value is replaced with. */
 export const REDACTED = "[redacted]";
@@ -62,6 +63,8 @@ function walk(
   if (value === null) return null;
   switch (typeof value) {
     case "string":
+      // jsonb refuses \u0000 and a lone surrogate, and the whole write would fail with them.
+      return storable(value);
     case "boolean":
       return value;
     case "number":
@@ -95,8 +98,9 @@ function walk(
         ? [...object].map(([key, item]) => [String(key), item])
         : Object.entries(object);
     const result: { [key: string]: Json } = {};
-    for (const [key, item] of entries) {
+    for (const [rawKey, item] of entries) {
       if (item === undefined) continue;
+      const key = storable(rawKey);
       if (redact(key)) {
         result[key] = REDACTED;
         continue;

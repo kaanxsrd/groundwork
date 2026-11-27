@@ -15,6 +15,7 @@ import { type Duration, isDuration, parseDuration } from "../internal/duration.t
 import { GroundworkError } from "../internal/errors.ts";
 import { consoleLogger, createOnceLogger, type Logger } from "../internal/logger.ts";
 import { assertTableColumns } from "../internal/table.ts";
+import { storable } from "../internal/text.ts";
 import type { RateLimiter, RateLimitResult, RateLimitRule } from "../rate-limit/types.ts";
 import { API_KEY_COLUMNS, type ApiKeysTable } from "../schema/api-keys.ts";
 import {
@@ -157,8 +158,8 @@ const textArray = (values: readonly string[]): SQL =>
   sql`array(select value from jsonb_array_elements_text(${jsonbParam(JSON.stringify(values))}) with ordinality as t(value, position) order by position)::text[]`;
 
 function actorName(actor: AuditActor): string | null {
-  if (actor.id !== undefined && actor.id !== null) return String(actor.id);
-  return actor.label ?? null;
+  if (actor.id !== undefined && actor.id !== null) return storable(String(actor.id));
+  return actor.label === undefined || actor.label === null ? null : storable(actor.label);
 }
 
 /**
@@ -306,7 +307,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
           "name must be a non-empty string of at most 200 characters.",
         );
       }
-      out.name = sql`${input.name.trim()}::text`;
+      out.name = sql`${storable(input.name.trim())}::text`;
     }
     if (input.description !== undefined) {
       if (
@@ -318,7 +319,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
           "description must be a string of at most 2,000 characters.",
         );
       }
-      out.description = sql`${input.description}::text`;
+      out.description = sql`${input.description === null ? null : storable(input.description)}::text`;
     }
     if (!partial || input.scopes !== undefined) {
       out.scopes = textArray(scopeRules.grantable(input.scopes, "scopes"));
@@ -697,7 +698,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       const [result] = await run(
         revokeOptions.tx ?? db,
         mutation(sql`changed as (
-          update ${table} as k set revoked_at = input.now, revoked_reason = ${reason}::text,
+          update ${table} as k set revoked_at = input.now, revoked_reason = ${reason === null ? null : storable(reason)}::text,
             previous_key_hash = null, previous_key_expires_at = null, updated_at = input.now
           from input where k.id = ${id}::uuid and k.revoked_at is null
           returning ${RECORD} as record
@@ -728,7 +729,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
         suspendOptions.tx ?? db,
         mutation(sql`changed as (
           update ${table} as k set suspended_until = input.now + ${forMs}::float8 * interval '1 millisecond',
-            suspended_reason = ${reason}::text, updated_at = input.now
+            suspended_reason = ${reason === null ? null : storable(reason)}::text, updated_at = input.now
           from input where k.id = ${id}::uuid and k.revoked_at is null
           returning ${RECORD} as record
         )`),

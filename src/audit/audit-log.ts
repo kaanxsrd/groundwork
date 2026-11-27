@@ -4,6 +4,7 @@ import { type GroundworkDatabase, jsonbParam, rowsOf, toNumber } from "../intern
 import { parseDuration } from "../internal/duration.ts";
 import { GroundworkError } from "../internal/errors.ts";
 import { assertTableColumns } from "../internal/table.ts";
+import { storable } from "../internal/text.ts";
 import { AUDIT_LOG_COLUMNS, type AuditLogTable } from "../schema/audit-log.ts";
 import { decodeCursor, encodeCursor } from "./cursor.ts";
 import { createRedactor, DEFAULT_REDACT, type RedactRule, toJsonObject } from "./json.ts";
@@ -90,13 +91,13 @@ function validateList(values: unknown, label: string): string[] {
 
 function optionalText(value: unknown, label: string): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return storable(value);
   throw new GroundworkError("invalid_argument", `${label} must be a string.`);
 }
 
 function optionalId(value: unknown, label: string): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return storable(value);
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   throw new GroundworkError("invalid_argument", `${label} must be a string or a number.`);
 }
