@@ -48,6 +48,10 @@ git tag v0.2.0
 git push && git push origin v0.2.0
 ```
 
+For a new minor or major, also point `examples/next-app/package.json` at it (`^0.5.0`) in the version commit. CI installs the example from the packed tarball, so it can't see a stale range, but anyone running `npm install` in the example would.
+
+The workflow refuses to publish when the tag and version differ, when changesets are left over, when the example's range is stale, or while `drizzle-orm` or `drizzle-kit` in `package.json` is a prerelease. CI can pass on a Drizzle release candidate, but users get Drizzle from npm's `latest` tag.
+
 Approve the run under **Actions → Release**. Then check the package page and that `npm view @vantedev/groundwork version` shows the new version.
 
 ## Choosing the version

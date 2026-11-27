@@ -1,0 +1,47 @@
+{
+  "type": "diff",
+  "version": "10",
+  "dialect": "postgres",
+  "id": "0dd6f787-8dc3-4dfd-94aa-c91cf40ead71",
+  "prevIds": [
+    "dcd2a09c-0628-4e14-b673-0ee4e1481c20"
+  ],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "gw_jobs",
+        "claims"
+      ],
+      "writes": [
+        "s|col|public.gw_jobs.claims",
+        "n|col|public.gw_jobs.claims",
+        "e|col|public.gw_jobs.claims"
+      ],
+      "reads": [
+        "n|tbl|public.gw_jobs",
+        "n|sch|public"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "gw_jobs",
+        "name": "claims",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

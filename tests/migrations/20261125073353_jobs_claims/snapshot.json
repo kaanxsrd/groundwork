@@ -1,0 +1,81 @@
+{
+  "type": "diff",
+  "version": "10",
+  "dialect": "postgres",
+  "id": "ca35735d-4ee7-4975-9724-a12e668acffb",
+  "prevIds": [
+    "9f61edd7-97e6-445b-ba38-2a7a588d37f0"
+  ],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "groundwork_alt",
+        "alt_jobs",
+        "claims"
+      ],
+      "writes": [
+        "s|col|groundwork_alt.alt_jobs.claims",
+        "n|col|groundwork_alt.alt_jobs.claims",
+        "e|col|groundwork_alt.alt_jobs.claims"
+      ],
+      "reads": [
+        "n|tbl|groundwork_alt.alt_jobs",
+        "n|sch|groundwork_alt"
+      ]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "gw_jobs",
+        "claims"
+      ],
+      "writes": [
+        "s|col|public.gw_jobs.claims",
+        "n|col|public.gw_jobs.claims",
+        "e|col|public.gw_jobs.claims"
+      ],
+      "reads": [
+        "n|tbl|public.gw_jobs",
+        "n|sch|public"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "groundwork_alt",
+        "table": "alt_jobs",
+        "name": "claims",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "gw_jobs",
+        "name": "claims",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

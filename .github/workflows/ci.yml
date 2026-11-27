@@ -65,11 +65,12 @@ jobs:
         if: failure()
         run: docker compose logs
 
-  drizzle-next:
-    # groundwork moves to Drizzle 1.0 once it's released (PLAN.md section 9). Until then this runs
-    # the suite against Drizzle's release candidate, so the move stays small. It doesn't fail the
-    # workflow: a new release candidate can break here before groundwork has had a chance to change.
-    name: Drizzle 1.0 release candidate (Postgres 18, both drivers)
+  drizzle-newest:
+    # devDependencies pin one Drizzle, but the peer range lets apps install newer ones. This runs
+    # the suite on Drizzle's newest release: the rc tag while groundwork is on a release candidate,
+    # latest after. It doesn't fail the workflow, since a Drizzle release can break here before
+    # groundwork has had a chance to change.
+    name: Newest Drizzle release (Postgres 18, both drivers)
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -81,15 +82,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: "${{ env.BUN_VERSION }}" }
       - run: bun install --frozen-lockfile
-      - name: Install drizzle-orm and drizzle-kit from the rc tag
-        run: bun add --dev --exact drizzle-orm@rc drizzle-kit@rc
-      # Drizzle 1.0's migrate() and drizzle-kit refuse the old folder format, as they do for apps.
-      - name: Convert tests/migrations to drizzle-kit 1.0's folder format
-        run: bun x drizzle-kit up --dialect postgresql --out tests/migrations
-      # src only: the test harness's database type is written for Drizzle 0.45.
-      - name: src type-checks against Drizzle 1.0
-        run: bun x tsc --noEmit -p tsconfig.build.json
-      - name: drizzle-kit 1.0 finds no changes in the fixture schema
+      - name: Install drizzle-orm and drizzle-kit from the newest release's tag
+        run: |
+          TAG=$(node -p "require('./package.json').devDependencies['drizzle-orm'].includes('-') ? 'rc' : 'latest'")
+          bun add --dev --exact "drizzle-orm@$TAG" "drizzle-kit@$TAG"
+      - run: bun run typecheck
+      - name: drizzle-kit finds no changes in the fixture schema
         run: bun run db:drift
       - run: bun run db:up
       - name: Integration tests with postgres-js

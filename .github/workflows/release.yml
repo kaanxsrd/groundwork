@@ -46,6 +46,16 @@ jobs:
             echo "::error::Unreleased changesets: run 'bun x changeset version' and commit first"; exit 1
           fi
           node -e "const p=require('./package.json'); if (!p.repository || p.publishConfig?.access !== 'public') { console.error('::error::package.json needs repository and publishConfig.access public'); process.exit(1) }"
+          # CI passes on a Drizzle release candidate, but a peer range that needs one fails
+          # `npm install` for everyone whose drizzle-orm comes from npm's latest tag.
+          node -e "const p=require('./package.json'); const v=[p.peerDependencies['drizzle-orm'], p.devDependencies['drizzle-orm'], p.devDependencies['drizzle-kit']]; if (v.some((x) => x.includes('-'))) { console.error('::error::drizzle-orm and drizzle-kit must be stable releases, not ' + v.join(', ')); process.exit(1) }"
+          # CI installs the example from the packed tarball, so only this catches a stale range.
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          if [ "${VERSION%%.*}" = "0" ]; then WANT="^0.$MINOR.0"; else WANT="^${VERSION%%.*}.0.0"; fi
+          EXAMPLE=$(node -p "require('./examples/next-app/package.json').dependencies['@vantedev/groundwork']")
+          if [ "$EXAMPLE" != "$WANT" ]; then
+            echo "::error::examples/next-app depends on @vantedev/groundwork $EXAMPLE, not $WANT"; exit 1
+          fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "PACKAGE=$(node -p "require('./package.json').name")" >> "$GITHUB_ENV"
 
