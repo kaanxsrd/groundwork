@@ -1,5 +1,37 @@
 # @vantedev/groundwork
 
+## 1.0.0
+
+### Major Changes
+
+- 0dfc560: **groundwork 1.0: the API is stable.** From here on groundwork follows semver: a minor release adds, a patch fixes, and only a major breaks. [docs/releasing.md](https://github.com/kaanxsrd/groundwork/blob/main/docs/releasing.md#versions) says what counts as breaking. groundwork 1.x works with Drizzle 0.45; Drizzle 1.0 will come with groundwork 2.0, since the table types are tied to the Drizzle major. There's no migration in this release.
+  
+  What to update from 0.4:
+  
+  - **`runOnce({ budgetMs })` and `jobsRoute(gw, { budgetMs })` take `budget`, a duration:** `{ budget: "50s" }`. Passing `budgetMs` throws, with a message that names the new option.
+  - **`verify()`'s failure result always has `missingScopes`, `rateLimit` and `quota`:** an empty list and `null` when they don't apply, as the success result has `rateLimit` and `quota`. Before, they were missing. Code that checks `=== undefined` needs `=== null`, or `.length === 0` for `missingScopes`.
+  - **`ApiKeyEvent` is a union on `type`:** an `update` always has `before`, a `rotate` `grace`, and a `revoke` or `suspend` `reason` (`string | null`). Read them after narrowing on `type`.
+  - **`RateLimitStore` is opaque:** stores come from `redisStore()` and `memoryStore()`, and `Policy`, `ConsumeInput` and `StoreState` are no longer exported. A store of your own was the one interface marked as unstable; it isn't supported in 1.x.
+  - **`backoffDelayMs` is no longer exported.** A failed job's `runAt` says when it runs again.
+  - **`enqueue(…, { replace: true })` throws a `GroundworkError` with the new code `conflict`** after losing every retry to concurrent enqueues of the same key, instead of a plain `Error`.
+  
+  Additions:
+  
+  - `jobsRoute`'s `secret` can be a function, called on the first request, so `next build` works without `CRON_SECRET`. Its `budget` and `concurrency` are checked when it's created, so a typo fails at startup instead of on every cron call.
+  - `Groundwork`'s type parameters default to `string`, so a configured instance can be passed where a plain `Groundwork` is expected.
+
+### Patch Changes
+
+- e650179: groundwork works on a postgres-js client with a built-in column transform (`postgres.camel`, `postgres.pascal` or `postgres.kebab`). Before, such a client renamed the columns groundwork reads: a rate-limit check failed with "Expected a number from the database" and fell back to its in-memory store, and API keys, the audit log, jobs and idempotency failed too. Your JSON was never at risk, because groundwork already read job payloads, audit metadata and stored responses as text, which the transforms don't rename. A custom `transform` that renames columns some other way still isn't supported.
+- c453016: Jobs: four fixes to how a worker runs them.
+  
+  - **A job whose handler succeeded is never retried because of its result.** Before, if the result couldn't be stored, the job counted as a failed attempt: it ran again, repeating its side effects, until it ran out of attempts and `onExhausted` reported work that was done. Such a result is now stored as `null`, with an error logged. A database error while recording the outcome leaves the job to its lease, as a crash would.
+  - **A schema whose `validate` throws** (a transform calling `new Date(x).toISOString()` on an older payload, say) **fails the job at once**, with the real error as `lastError`. Before, the job sat in `running` until its lease ran out, its error was never logged, and `runOnce()` threw, so no other job in that call ran.
+  - **One job's error no longer stops `runOnce()`** or the other jobs of a `work()` loop. It's logged, and the job runs again after its lease.
+  - **`work()` no longer leaks memory while a job runs for a long time.** Every idle poll added a reaction to each running job's promise: at the default 1s poll, about 86,000 a day for one long job.
+- 51ac842: A `cost: 0` check (a peek) no longer starts a fixed window, or restarts an expired one, in any store. It reads the state and writes nothing, as documented. Before, a peek on a new subject started its window, so the window ended earlier than the first real request's would have.
+- c453016: Strings Postgres can't store no longer make a write throw. Postgres refuses `\u0000` in `text` and `jsonb`, and `jsonb` also refuses a lone surrogate: half of an emoji, which `text.slice(0, 100)` can leave, or which a client can send. An audit entry, a job's payload or result, or an API key's name, metadata or revoke reason with one used to throw, rolling back the caller's transaction with it. Now each is stored with U+FFFD (�) in its place, as text parameters already did for lone surrogates. Identifiers are refused with `invalid_argument` instead, in writes and in filters, because cleaning could make two of them the same, and a filter with the original value wouldn't find the row: a job's `dedupeKey`, an audit entry's actor and entity ids and types, request id and IP, an API key's `ownerId`, and an idempotency `scope`.
+
 ## 0.4.0
 
 ### Minor Changes
