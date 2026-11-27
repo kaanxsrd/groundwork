@@ -54,25 +54,25 @@ export function apiKeyAuditEvent(event: ApiKeyEvent): AuditEvent<ApiKeyAuditActi
       return {
         ...base,
         summary: `Updated ${label}`,
-        changes: diff(event.before ? policy(event.before) : null, policy(key)),
+        changes: diff(policy(event.before), policy(key)),
       };
     case "rotate":
       return {
         ...base,
         summary: `Rotated ${label}; the old key works until ${key.previousKeyExpiresAt?.toISOString() ?? "now"}`,
-        metadata: { grace: event.grace ?? null },
+        metadata: { grace: event.grace },
       };
     case "revoke":
       return {
         ...base,
         summary: `Revoked ${label}${event.reason ? `: ${event.reason}` : ""}`,
-        metadata: { reason: event.reason ?? null },
+        metadata: { reason: event.reason },
       };
     case "suspend":
       return {
         ...base,
         summary: `Suspended ${label} until ${key.suspendedUntil?.toISOString() ?? "?"}`,
-        metadata: { reason: event.reason ?? null, until: key.suspendedUntil },
+        metadata: { reason: event.reason, until: key.suspendedUntil },
       };
     case "reinstate":
       return { ...base, summary: `Lifted the suspension on ${label}` };

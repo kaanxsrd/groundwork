@@ -4,6 +4,7 @@
 import {
   createGroundwork,
   type Duration,
+  type Groundwork,
   GroundworkError,
   type GroundworkErrorCode,
   isGroundworkError,
@@ -152,6 +153,35 @@ const verified: Promise<VerifyResult<"posts:read" | "posts:write">> = keys.verif
 );
 // @ts-expect-error verify needs declared scopes, not wildcards
 keys.verify("key", { scopes: ["posts:*"] });
+verified.then((result) => {
+  // Both branches carry rateLimit and quota as the same type, before narrowing too.
+  const limited: RateLimitResult | null = result.rateLimit;
+  if (!result.ok) {
+    const missing: readonly ("posts:read" | "posts:write")[] = result.missingScopes;
+    void missing;
+  }
+  void limited;
+});
+// onEvent narrows by type: an update always has before, a rotation always has grace.
+createApiKeys({
+  db: jsDb,
+  table: apiKeys,
+  secret,
+  namespace: "vnt",
+  scopes: { "posts:read": "Read posts" },
+  onEvent(event) {
+    if (event.type === "update") {
+      const before: string = event.before.name;
+      void before;
+    }
+    if (event.type === "rotate") {
+      const grace: Duration = event.grace;
+      void grace;
+    }
+    // @ts-expect-error only updates carry before
+    if (event.type === "create") void event.before;
+  },
+});
 const gwKeys = createGroundwork({
   db: jsDb,
   tables: { apiKeys, rateLimits },
@@ -159,6 +189,14 @@ const gwKeys = createGroundwork({
   apiKeys: { namespace: "vnt", scopes: { "billing:read": "Read invoices" } },
 });
 gwKeys.apiKeys.verify("key", { scopes: ["billing:read"] });
+// A configured instance passes where a plain Groundwork is expected, such as a shared helper.
+function anyInstance(instance: Groundwork): void {
+  void instance;
+}
+anyInstance(gwKeys);
+anyInstance(
+  createGroundwork({ db: jsDb, tables: { auditLog }, secret, audit: { actions: ["post.create"] } }),
+);
 // @ts-expect-error not a declared scope
 gwKeys.apiKeys.verify("key", { scopes: ["posts:read"] });
 

@@ -68,7 +68,7 @@ describe("package.json", () => {
       "./rate-limit": ["createRateLimiter", "ipSubject", "memoryStore", "redisStore"],
       "./audit": ["DEFAULT_REDACT", "REDACTED", "createAuditLog", "diff"],
       "./api-keys": ["API_KEY_AUDIT_ACTIONS", "apiKeyAuditEvent", "createApiKeys"],
-      "./jobs": ["backoffDelayMs", "createJobs"],
+      "./jobs": ["createJobs"],
       "./idempotency": [
         "IDEMPOTENCY_KEY_HEADER",
         "REPLAYED_HEADER",

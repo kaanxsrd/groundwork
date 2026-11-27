@@ -265,7 +265,7 @@ describe("verify: every reason", () => {
     });
     if (limited.ok) throw new Error("expected a failure");
     expect(limited.rateLimit).toMatchObject({ allowed: false, limit: 2, remaining: 0 });
-    expect(limited.quota).toBeUndefined();
+    expect(limited.quota).toBeNull();
     expect(limited.headers["Retry-After"]).toBe("60");
     expect(limited.response.headers.get("retry-after")).toBe("60");
     expect((await keys.verify(bearer(other.key))).ok).toBe(true); // its own counter
@@ -297,7 +297,7 @@ describe("verify: every reason", () => {
     if (over.ok) throw new Error("expected a failure");
     expect(over.headers["Retry-After"]).toBe("86400");
     expect(over.quota).toMatchObject({ allowed: false, limit: 3, remaining: 0 });
-    expect(over.rateLimit).toBeUndefined();
+    expect(over.rateLimit).toBeNull();
     clock.advance("1d");
     expect((await keys.verify(bearer(key))).ok).toBe(true);
   });

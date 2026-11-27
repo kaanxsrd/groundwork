@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { SQLWrapper } from "drizzle-orm";
 import { z } from "zod";
 import { validateWith } from "../../src/internal/standard-schema.ts";
-import { ladderDelayMs } from "../../src/jobs/backoff.ts";
-import { backoffDelayMs, createJobs, type JobHandle } from "../../src/jobs/index.ts";
+import { backoffDelayMs, ladderDelayMs } from "../../src/jobs/backoff.ts";
+import { createJobs, type JobHandle } from "../../src/jobs/index.ts";
 import { groundworkTables } from "../../src/schema/index.ts";
 
 const { jobs: table, jobSchedules: schedulesTable } = groundworkTables();

@@ -90,19 +90,35 @@ export type ApiKeyEventType =
   | "reinstate"
   | "delete";
 
-/** Passed to `onEvent` after every change to a key. */
-export interface ApiKeyEvent<TScope extends string = string> {
-  readonly type: ApiKeyEventType;
+interface ApiKeyEventBase<TScope extends string> {
+  /** The key after the change. */
   readonly key: ApiKeyRecord<TScope>;
-  /** For `update`: the key before the change. */
-  readonly before?: ApiKeyRecord<TScope> | undefined;
   readonly actor: AuditActor;
   /** The transaction the change ran in, if any. Record related writes in it. */
   readonly tx?: GroundworkDatabase | undefined;
-  readonly reason?: string | null | undefined;
-  /** For `rotate`: how long the old key keeps working. */
-  readonly grace?: Duration | undefined;
 }
+
+/**
+ * Passed to `onEvent` after every change to a key. Switch on `type` to read what that change
+ * carries: `before` for an update, `grace` for a rotation, `reason` for a revocation or
+ * suspension. New types may be added in a minor release, so keep a `default` branch.
+ */
+export type ApiKeyEvent<TScope extends string = string> =
+  | (ApiKeyEventBase<TScope> & { readonly type: "create" | "reinstate" | "delete" })
+  | (ApiKeyEventBase<TScope> & {
+      readonly type: "update";
+      /** The key before the change. */
+      readonly before: ApiKeyRecord<TScope>;
+    })
+  | (ApiKeyEventBase<TScope> & {
+      readonly type: "rotate";
+      /** How long the old key keeps working. */
+      readonly grace: Duration;
+    })
+  | (ApiKeyEventBase<TScope> & {
+      readonly type: "revoke" | "suspend";
+      readonly reason: string | null;
+    });
 
 export type VerifyFailureReason =
   | "missing"
@@ -146,12 +162,12 @@ export type VerifyResult<TScope extends string = string> =
       readonly key: ApiKeyRecord<TScope> | null;
       /** The presented key's prefix (`vnt_3f9ca0c44a15`) when it parsed, for logging failed attempts. */
       readonly prefix: string | null;
-      /** For `forbidden_scope`: what was missing. */
-      readonly missingScopes?: readonly TScope[] | undefined;
-      /** For `rate_limited` and `quota_exceeded`: the per-key limit's check. */
-      readonly rateLimit?: RateLimitResult | undefined;
-      /** For `quota_exceeded`: the daily quota's check. */
-      readonly quota?: RateLimitResult | undefined;
+      /** For `forbidden_scope`: what was missing. Empty for every other reason. */
+      readonly missingScopes: readonly TScope[];
+      /** For `rate_limited` and `quota_exceeded`: the per-key limit's check. Otherwise `null`. */
+      readonly rateLimit: RateLimitResult | null;
+      /** For `quota_exceeded`: the daily quota's check. Otherwise `null`. */
+      readonly quota: RateLimitResult | null;
       readonly headers: Readonly<Record<string, string>>;
       /** A ready JSON response: `{ "error": { "code", "message" } }` with the right headers. */
       readonly response: Response;

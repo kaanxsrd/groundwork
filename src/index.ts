@@ -182,10 +182,14 @@ export interface GroundworkOptions<
     | undefined;
 }
 
+/**
+ * The instance `createGroundwork()` returns. Its type parameters come from the options: audit
+ * actions, audit entity types and API-key scopes. A bare `Groundwork` accepts any instance.
+ */
 export interface Groundwork<
-  TAuditAction extends string = never,
+  TAuditAction extends string = string,
   TAuditEntity extends string = string,
-  TScope extends string = never,
+  TScope extends string = string,
 > {
   readonly rateLimit: RateLimiter;
   /** Also accepts groundwork's own `api_key.*` actions, which API-key changes record. */

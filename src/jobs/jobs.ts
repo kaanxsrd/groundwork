@@ -568,7 +568,10 @@ export function createJobs(options: JobsOptions): Jobs {
         where ${mine} and j.status = 'running' and j.locked_until > ${current()}`);
     }
     // Other callers kept taking the key between the two statements.
-    throw new Error("enqueue with replace kept colliding with other enqueues of the same key");
+    throw new GroundworkError(
+      "conflict",
+      "enqueue with replace kept colliding with other enqueues of the same key; try again.",
+    );
   }
 
   /**

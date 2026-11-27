@@ -1,10 +1,14 @@
 /**
- * Machine-readable reason for a {@link GroundworkError}.
+ * Machine-readable reason for a {@link GroundworkError}. More codes may be added in a minor
+ * release, so keep a default branch when you switch on it.
  *
- * - `invalid_config`: options passed when creating a module are wrong. Thrown at startup.
+ * - `invalid_config`: the setup is wrong: options passed when creating a module, a module used
+ *   without its table or options, a secret function that returns a bad secret, or a table that
+ *   needs a migration. Mostly thrown at startup; the ones only a request can find, on that request.
  * - `invalid_argument`: a value passed to a method is wrong (for example a malformed duration).
+ * - `conflict`: the call kept losing a race with concurrent calls, after retrying. Try it again.
  */
-export type GroundworkErrorCode = "invalid_config" | "invalid_argument";
+export type GroundworkErrorCode = "invalid_config" | "invalid_argument" | "conflict";
 
 const BRAND: unique symbol = Symbol.for("groundwork.error");
 

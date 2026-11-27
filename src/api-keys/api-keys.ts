@@ -436,9 +436,9 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
       message: MESSAGES[reason],
       key,
       prefix: extra.prefix ?? null,
-      ...(missingScopes.length > 0 ? { missingScopes } : {}),
-      ...(extra.rateLimit ? { rateLimit: extra.rateLimit } : {}),
-      ...(extra.quota ? { quota: extra.quota } : {}),
+      missingScopes,
+      rateLimit: extra.rateLimit ?? null,
+      quota: extra.quota ?? null,
       headers,
       response: failureResponse(reason, headers, missingScopes),
     };
@@ -636,6 +636,7 @@ export function createApiKeys<const TScopes extends Record<string, string>>(
         ),
       );
       if (!result) return null;
+      if (result.before === undefined) throw new Error("update returned no previous record");
       await emit({
         type: "update",
         key: result.record,
